@@ -3,36 +3,53 @@
 #include <numbers>
 #include <limits>
 #include <vector>
-#include <unordered_map>
-#include <unordered_set>
+#include <utility>
 #include <algorithm>
 #include <charconv>
-#include <random>
 #include <fstream>
+
+#include <absl/flags/flag.h>
+#include <absl/flags/parse.h>
+#include <absl/flags/usage.h>
+#include <absl/random/random.h>
+#include <absl/container/flat_hash_set.h>
 
 #include <simdjson.h>
 
+#include <CGAL/Unique_hash_map.h>
+#include <CGAL/spatial_sort_on_sphere.h>
 #include <CGAL/Exact_predicates_inexact_constructions_kernel.h>
 #include <CGAL/Delaunay_triangulation_on_sphere_traits_2.h>
 #include <CGAL/Delaunay_triangulation_on_sphere_2.h>
 
 using LinearKernel = CGAL::Exact_predicates_inexact_constructions_kernel;
-using SphericalDelaunayTraits = CGAL::Delaunay_triangulation_on_sphere_traits_2<LinearKernel>;
-using SphericalDelaunay = CGAL::Delaunay_triangulation_on_sphere_2<SphericalDelaunayTraits>;
 
-using Point3 = SphericalDelaunay::Point_3;
+using Point3 = LinearKernel::Point_3;
 
-constexpr double EARTH_RADIUS_MILES = 3963.1676;
+using ServerID = int32_t;
 
-constexpr size_t SHORT_RANGE_SERVERS = 100;
-constexpr size_t LONG_RANGE_SERVERS = 20;
-constexpr size_t MAX_SERVERS = std::max(SHORT_RANGE_SERVERS, LONG_RANGE_SERVERS);
+class Angle {
+private:
+	double cos;
+public:
+	Angle(LinearKernel::FT radians) :
+		cos(std::cos(radians)) {}
 
-constexpr double SHORT_SEARCH_RANGE = 30.0;
-constexpr double LONG_SEARCH_RANGE = 2000.0;
+	Angle(const Point3& p1, const Point3& p2) :
+		cos(p1.x() * p2.x() + p1.y() * p2.y() + p1.z() * p2.z()) {}
 
-const double SHORT_RANGE_COSINE = std::cos(SHORT_SEARCH_RANGE / EARTH_RADIUS_MILES);
-const double LONG_RANGE_COSINE = std::cos(LONG_SEARCH_RANGE / EARTH_RADIUS_MILES);
+	LinearKernel::FT cosine() const {
+		return this->cos;
+	}
+
+	friend bool operator<(const Angle& lhs, const Angle& rhs) {
+		return lhs.cos > rhs.cos;
+	}
+
+	friend bool operator>(const Angle& lhs, const Angle& rhs) {
+		return lhs.cos < rhs.cos;
+	}
+};
 
 class GeographicPoint {
 private:
@@ -48,15 +65,15 @@ public:
 	}
 
 	GeographicPoint(const Point3& point) {
-		this->lat = std::asin(point.hz() / point.hw()) * 180 / std::numbers::pi;
-		this->lon = std::atan2(point.hy(), point.hx()) * 180 / std::numbers::pi;
+		this->lat = std::asin(point.z()) * 180 / std::numbers::pi;
+		this->lon = std::atan2(point.y(), point.x()) * 180 / std::numbers::pi;
 	}
 
-	double getLatitude() const {
+	LinearKernel::FT getLatitude() const {
 		return this->lat;
 	}
 
-	double getLongtitude() const {
+	LinearKernel::FT getLongtitude() const {
 		return this->lon;
 	}
 
@@ -72,42 +89,14 @@ public:
 	}
 };
 
-class Server {
-public:
-	using ID = int32_t;
-private:
-	Server::ID id;
-	GeographicPoint location;
-public:
-	Server(Server::ID serverID, GeographicPoint location) :
-		id(serverID),
-		location(location) {}
-
-	Server::ID getID() const {
-		return this->id;
-	}
-
-	const GeographicPoint& getLocation() const {
-		return this->location;
-	}
-};
-
 class RandomPointGenerator {
 private:
-	using RandomGenerator = std::mt19937;
-
-	RandomGenerator rng;
-	std::normal_distribution<> dist;
+	absl::InsecureBitGen rng;
 public:
-	RandomPointGenerator() {
-		std::random_device seedRng;
-		this->rng = RandomGenerator(seedRng());
-	}
-
 	Point3 operator()() {
-		double x = this->dist(this->rng);
-		double y = this->dist(this->rng);
-		double z = this->dist(this->rng);
+		double x = absl::Gaussian<double>(this->rng);
+		double y = absl::Gaussian<double>(this->rng);
+		double z = absl::Gaussian<double>(this->rng);
 
 		double length = std::sqrt(x * x + y * y + z * z);
 
@@ -117,274 +106,444 @@ public:
 
 class Queries {
 private:
-	using ServerIterator = std::vector<Server::ID>::const_iterator;
-
 	struct QueryTag {
 		Point3 location;
-		size_t endIndex;
+		size_t size;
 	};
 
-	std::vector<Server::ID> servers;
-	std::vector<QueryTag> queries;
+	union Item {
+		static constexpr size_t NUM_SERVERS = sizeof(QueryTag) / sizeof(ServerID);
+
+		QueryTag tag;
+		ServerID servers[NUM_SERVERS];
+
+		Item() {}
+
+		Item(const Point3& location) : tag(location, 0) {}
+	};
+
+	using ItemIterator = std::vector<Item>::const_iterator;
+
+	std::vector<Item> items;
+
+	size_t lastQueryIndex = 0;
 public:
+	static constexpr size_t SHORT_RANGE_SERVERS = 100;
+	static constexpr size_t LONG_RANGE_SERVERS = 20;
+	static constexpr size_t MAX_SERVERS_PER_RANGE = std::max(SHORT_RANGE_SERVERS, LONG_RANGE_SERVERS);
+
+	class ServerIterator {
+	private:
+		ItemIterator iter;
+		size_t index;
+	public:
+		using difference_type = std::ptrdiff_t;
+		using value_type = ServerID;
+		using reference = const value_type&;
+		using pointer = const value_type*;
+		using iterator_category = std::forward_iterator_tag;
+
+		ServerIterator() = default;
+
+		ServerIterator(const ServerIterator& other) = default;
+
+		ServerIterator(ItemIterator itemIterator, size_t serverIndex) :
+			iter(itemIterator + serverIndex / Item::NUM_SERVERS),
+			index(serverIndex % Item::NUM_SERVERS) {}
+
+		const ServerID& operator*() const {
+			return this->iter->servers[this->index];
+		}
+
+		const ServerID* operator->() const {
+			return &this->iter->servers[this->index];
+		}
+
+		ServerIterator& operator++() {
+			this->iter += (this->index + 1) / Item::NUM_SERVERS;
+			this->index = (this->index + 1) % Item::NUM_SERVERS;
+			return *this;
+		}
+
+		ServerIterator operator++(int) {
+			ServerIterator it = *this;
+			++*this;
+			return it;
+		}
+
+		bool operator==(const ServerIterator& other) const {
+			return this->iter == other.iter && this->index == other.index;
+		}
+	};
+
 	class Query {
 	private:
-		const Point3& location;
-		ServerIterator serversBegin;
-		ServerIterator serversEnd;
+		ItemIterator iter;
 	public:
-		Query(const Point3& location, ServerIterator begin, ServerIterator end) :
-			location(location),
-			serversBegin(begin),
-			serversEnd(end) {}
+		Query(ItemIterator itemIterator) : iter(itemIterator) {}
 
 		const Point3& getLocation() const {
-			return this->location;
+			return this->iter->tag.location;
 		}
 
 		size_t size() const {
-			return this->serversEnd - this->serversBegin;
+			return this->iter->tag.size;
 		}
 
 		ServerIterator begin() const {
-			return this->serversBegin;
+			return ServerIterator(this->iter + 1, 0);
 		}
 
 		ServerIterator end() const {
-			return this->serversEnd;
+			return ServerIterator(this->iter + 1, this->iter->tag.size);
+		}
+	};
+
+	class QueryIterator {
+	private:
+		ItemIterator iter;
+	public:
+		using difference_type = std::ptrdiff_t;
+		using value_type = Query;
+		using reference = value_type;
+		using pointer = void;
+		using iterator_category = std::input_iterator_tag;
+
+		QueryIterator(const QueryIterator& other) = default;
+
+		QueryIterator(ItemIterator itemIterator) : iter(itemIterator) {}
+
+		Query operator*() const {
+			return Query(this->iter);
+		}
+
+		QueryIterator& operator++() {
+			this->iter += (this->iter->tag.size + Item::NUM_SERVERS - 1) / Item::NUM_SERVERS + 1;
+			return *this;
+		}
+
+		QueryIterator operator++(int) {
+			QueryIterator it = *this;
+			++*this;
+			return it;
+		}
+
+		bool operator==(const QueryIterator& other) const {
+			return this->iter == other.iter;
 		}
 	};
 
 	Queries(size_t queryCount) {
-		this->servers.reserve(MAX_SERVERS * queryCount);
-		this->queries.reserve(queryCount);
-		this->endQuery(Point3());
+		this->items.reserve((1 + (MAX_SERVERS_PER_RANGE + Item::NUM_SERVERS - 1) / Item::NUM_SERVERS) * queryCount);
 	}
 
 	Queries(const Queries& other) = delete;
 
-	Queries(Queries&& other) noexcept :
-		servers(std::move(other.servers)),
-		queries(std::move(other.queries)) {}
-
 	Queries& operator=(const Queries& other) = delete;
 
-	Queries& operator=(Queries&& other) noexcept {
-		this->servers = std::move(other.servers);
-		this->queries = std::move(other.queries);
-		return *this;
+	void beginQuery(const Point3& location) {
+		this->items.emplace_back(location);
+		this->lastQueryIndex = this->items.size() - 1;
 	}
 
-	void endQuery(const Point3& location) {
-		this->queries.emplace_back(location, this->servers.size());
+	void insertServer(ServerID serverID) {
+		size_t serverIndex = (this->items[this->lastQueryIndex].tag.size++) % Item::NUM_SERVERS;
+
+		if (serverIndex == 0)
+			this->items.emplace_back();
+
+		this->items.back().servers[serverIndex] = serverID;
 	}
 
-	void insertServer(Server::ID serverID) {
-		this->servers.push_back(serverID);
+	QueryIterator begin() const {
+		return QueryIterator(this->items.begin());
 	}
 
-	size_t bufferedServers() const {
-		return this->servers.size() - this->queries.back().endIndex;
-	}
-
-	size_t size() const {
-		return this->queries.size() - 1;
-	}
-
-	Query operator[](size_t index) const {
-		size_t serversStart = this->queries[index].endIndex;
-		size_t serversEnd = this->queries[index + 1].endIndex;
-		return Query(this->queries[index + 1].location, this->servers.begin() + serversStart, this->servers.begin() + serversEnd);
+	QueryIterator end() const {
+		return QueryIterator(this->items.end());
 	}
 };
 
-class RangeBuilder {
+class QueryBuilder {
 private:
+	using SphericalDelaunayTraits = CGAL::Delaunay_triangulation_on_sphere_traits_2<LinearKernel>;
+	using SphericalDelaunay = CGAL::Delaunay_triangulation_on_sphere_2<SphericalDelaunayTraits>;
+
+	using VertexHandle = SphericalDelaunay::Vertex_handle;
+	using FaceHandle = SphericalDelaunay::Face_handle;
+
+	using VertexSet = absl::flat_hash_set<VertexHandle>;
+	using VertexMap = CGAL::Unique_hash_map<VertexHandle, std::vector<ServerID>>;
+
 	SphericalDelaunay delaunay;
-	std::unordered_map<SphericalDelaunay::Vertex_handle, std::vector<Server::ID>> buckets;
+	VertexMap buckets;
 
-	struct Neighbour {
-		SphericalDelaunay::Vertex_handle vertex;
-		SphericalDelaunay::FT distance;
+	static constexpr double EARTH_RADIUS_MILES = 3963.1676;
 
-		Neighbour(const Point3& origin, const SphericalDelaunay& delaunay, SphericalDelaunay::Vertex_handle vertexHandle) :
-			vertex(vertexHandle) {
-			const Point3& location = delaunay.point(vertexHandle);
-			this->distance = (origin.hx() * location.hx() + origin.hy() * location.hy() + origin.hz() * location.hz()) / (origin.hw() * location.hw());
+	inline static const Angle SHORT_RANGE_ANGLE = Angle(30.0 / EARTH_RADIUS_MILES);
+	inline static const Angle LONG_RANGE_ANGLE = Angle(2000.0 / EARTH_RADIUS_MILES);
+
+	struct NoOpEdgeIterator {
+		using difference_type = void;
+		using value_type = void;
+		using reference = void;
+		using pointer = void;
+		using iterator_category = std::output_iterator_tag;
+
+		SphericalDelaunay::Edge operator*() {
+			return SphericalDelaunay::Edge();
 		}
 
-		bool operator<(const Neighbour& other) const {
-			return this->distance < other.distance;
+		NoOpEdgeIterator& operator++() {
+			return *this;
+		}
+
+		NoOpEdgeIterator operator++(int) {
+			return *this;
+		}
+	};
+
+	struct Neighbour {
+		VertexHandle vertex;
+		Angle distance;
+
+		Neighbour(const Point3& origin, const SphericalDelaunay& delaunayTriang, VertexHandle vertexHandle) :
+			vertex(vertexHandle),
+			distance(origin, delaunayTriang.point(vertexHandle)) {}
+
+		friend bool operator<(const Neighbour& lhs, const Neighbour& rhs) {
+			return lhs.distance < rhs.distance;
+		}
+
+		friend bool operator>(const Neighbour& lhs, const Neighbour& rhs) {
+			return lhs.distance > rhs.distance;
 		}
 	};
 
 	void dijkstraSearch(const Point3& origin,
 			    std::vector<Neighbour>& vertices,
-			    std::unordered_set<SphericalDelaunay::Vertex_handle>& reached,
+			    VertexSet& reached,
 			    Queries& queries) const {
+		queries.beginQuery(origin);
+
+		size_t insertedServers = 0;
+
 		while (!vertices.empty()) {
 			const Neighbour& neighbour = vertices.front();
 
 			size_t limit;
 
-			if (neighbour.distance > SHORT_RANGE_COSINE) {
-				limit = SHORT_RANGE_SERVERS;
-			} else if (neighbour.distance > LONG_RANGE_COSINE) {
-				limit = LONG_RANGE_SERVERS;
+			if (neighbour.distance < SHORT_RANGE_ANGLE) {
+				limit = Queries::SHORT_RANGE_SERVERS;
+			} else if (neighbour.distance < LONG_RANGE_ANGLE) {
+				limit = Queries::LONG_RANGE_SERVERS;
 			} else {
-				queries.endQuery(origin);
 				return;
 			}
 
-			for (Server::ID serverID : this->buckets.at(neighbour.vertex)) {
-				if (queries.bufferedServers() >= limit) {
-					queries.endQuery(origin);
+			for (ServerID serverID : this->buckets[neighbour.vertex]) {
+				if (insertedServers >= limit)
 					return;
-				}
 
 				queries.insertServer(serverID);
+
+				insertedServers++;
 			}
 
 			auto incidents = this->delaunay.incident_vertices(neighbour.vertex);
 			auto nextVertex = incidents;
 
-			std::pop_heap(vertices.begin(), vertices.end());
+			std::pop_heap(vertices.begin(), vertices.end(), std::greater{});
 			vertices.pop_back();
 
 			do {
 				if (reached.insert(nextVertex).second) {
 					vertices.emplace_back(origin, this->delaunay, nextVertex);
-					std::push_heap(vertices.begin(), vertices.end());
+					std::push_heap(vertices.begin(), vertices.end(), std::greater{});
 				}
 
 				nextVertex++;
 			} while (nextVertex != incidents);
 		}
+	}
 
-		queries.endQuery(origin);
+	void build(Queries& queries, const std::vector<Point3>& searchPoints) const {
+		std::vector<Neighbour> vertices;
+		vertices.reserve(this->delaunay.number_of_vertices());
+
+		std::vector<FaceHandle> faces;
+		faces.reserve(this->delaunay.number_of_faces());
+
+		VertexSet reached;
+		reached.reserve(this->delaunay.number_of_vertices());
+
+		FaceHandle loc;
+
+		for (const Point3& origin : searchPoints) {
+			SphericalDelaunay::Locate_type lt;
+			int li;
+			loc = this->delaunay.locate(origin, lt, li, loc);
+
+			if (lt != SphericalDelaunay::Locate_type::VERTEX && lt != SphericalDelaunay::Locate_type::TOO_CLOSE) {
+				this->delaunay.get_conflicts_and_boundary(origin, std::back_inserter(faces), NoOpEdgeIterator(), loc);
+
+				for (FaceHandle face : faces) {
+					face->tds_data().clear();
+
+					for (int i = 0; i < 3; i++) {
+						VertexHandle vertex = face->vertex(i);
+
+						if (reached.insert(vertex).second)
+							vertices.emplace_back(origin, this->delaunay, vertex);
+					}
+				}
+
+				std::make_heap(vertices.begin(), vertices.end(), std::greater{});
+			} else {
+				VertexHandle found = loc->vertex(li);
+
+				reached.insert(found);
+				vertices.emplace_back(origin, this->delaunay, found);
+			}
+
+			this->dijkstraSearch(origin, vertices, reached, queries);
+
+			vertices.clear();
+			faces.clear();
+			reached.clear();
+		}
 	}
 public:
 	template <typename ServerIt>
-	RangeBuilder(ServerIt begin, ServerIt end) {
-		for (ServerIt it = begin; it != end; it++) {
-			const Server& server = *it;
-			SphericalDelaunay::Vertex_handle vertex = this->delaunay.insert(server.getLocation().toPoint());
-			this->buckets[vertex].push_back(server.getID());
+	QueryBuilder(ServerIt begin, ServerIt end) {
+		for (ServerIt it = begin; it != end; ++it) {
+			const std::pair<ServerID, Point3>& server = *it;
+			VertexHandle vertex = this->delaunay.insert(server.second);
+			this->buckets[vertex].push_back(server.first);
 		}
+
+		if (this->delaunay.dimension() != 2)
+			throw std::invalid_argument("Delaunay triangulation is degenerate");
 	}
 
+	QueryBuilder(const QueryBuilder& other) = delete;
+
+	QueryBuilder& operator=(const QueryBuilder& other) = delete;
+
 	template <typename PointGenerator>
-	Queries build(PointGenerator generator, size_t points) {
-		std::vector<Neighbour> vertices;
-		std::unordered_set<SphericalDelaunay::Vertex_handle> reached;
+	void build(Queries& queries, PointGenerator generator, size_t pointsCount) const {
+		std::vector<Point3> points;
+		points.reserve(pointsCount);
 
-		Queries queries(points);
+		for (size_t count = 0; count < pointsCount; count++)
+			points.push_back(generator());
 
-		for (size_t count = 0; count < points; count++) {
-			Point3 origin = generator();
+		CGAL::spatial_sort_on_sphere(points.begin(), points.end());
 
-			vertices.clear();
-			reached.clear();
-
-			SphericalDelaunay::Vertex_handle inserted = this->delaunay.insert(origin);
-
-			if (!this->buckets.contains(inserted)) {
-				auto incidents = this->delaunay.incident_vertices(inserted);
-				auto nextVertex = incidents;
-
-				if (incidents == nullptr) {
-					this->delaunay.remove(inserted);
-					throw std::invalid_argument("Delaunay triangulation is degenerate");
-				}
-
-				reached.insert(inserted);
-
-				do {
-					reached.insert(nextVertex);
-					vertices.emplace_back(origin, this->delaunay, nextVertex);
-
-					nextVertex++;
-				} while (nextVertex != incidents);
-
-				std::make_heap(vertices.begin(), vertices.end());
-
-				this->dijkstraSearch(origin, vertices, reached, queries);
-
-				this->delaunay.remove(inserted);
-			} else {
-				if (this->delaunay.incident_vertices(inserted) == nullptr)
-					throw std::invalid_argument("Delaunay triangulation is degenerate");
-
-				reached.insert(inserted);
-				vertices.emplace_back(origin, this->delaunay, inserted);
-
-				this->dijkstraSearch(origin, vertices, reached, queries);
-			}
-		}
-
-		return queries;
+		this->build(queries, points);
 	}
 };
 
-std::vector<GeographicPoint> pruneQueries(const Queries& queries) {
-	std::unordered_set<Server::ID> covered;
-	std::vector<std::vector<size_t>> buckets;
+class ServerList {
+private:
+	using JsonIterator = simdjson::simdjson_result<simdjson::ondemand::array_iterator>;
 
-	std::vector<GeographicPoint> result;
+	simdjson::padded_string jsonData;
 
-	for (size_t queryIndex = 0; queryIndex < queries.size(); queryIndex++) {
-		size_t querySize = queries[queryIndex].size();
+	simdjson::ondemand::parser jsonParser;
+	simdjson::ondemand::document jsonDocument;
+public:
+	class ServerListIterator {
+	private:
+		JsonIterator iter;
+	public:
+		using difference_type = std::ptrdiff_t;
+		using value_type = std::pair<ServerID, Point3>;
+		using reference = value_type;
+		using pointer = void;
+		using iterator_category = std::input_iterator_tag;
+
+		ServerListIterator(const ServerListIterator& other) = default;
+
+		ServerListIterator(const JsonIterator& jsonIterator) : iter(jsonIterator) {}
+
+		std::pair<ServerID, Point3> operator*() {
+			auto serverObj = *this->iter;
+
+			int64_t uncheckedServerID = serverObj["server_id"].get_int64();
+
+			if (uncheckedServerID < 0 || uncheckedServerID > std::numeric_limits<ServerID>::max())
+				throw std::invalid_argument("Server ID is out of range");
+
+			ServerID serverID = static_cast<ServerID>(uncheckedServerID);
+
+			std::string_view lat = serverObj["latitude"];
+			std::string_view lon = serverObj["longtitude"];
+
+			return std::make_pair(serverID, GeographicPoint(lat, lon).toPoint());
+		}
+
+		ServerListIterator& operator++() {
+			++this->iter;
+			return *this;
+		}
+
+		bool operator==(const ServerListIterator& other) const {
+			return this->iter == other.iter;
+		}
+	};
+
+	ServerList(const std::string& inputFile) {
+		this->jsonData = simdjson::padded_string::load(inputFile);
+		this->jsonDocument = this->jsonParser.iterate(this->jsonData);
+	}
+
+	ServerListIterator begin() {
+		return ServerListIterator(this->jsonDocument.begin());
+	}
+
+	ServerListIterator end() {
+		return ServerListIterator(this->jsonDocument.end());
+	}
+};
+
+static size_t pruneQueries(std::vector<GeographicPoint>& result, const Queries& queries) {
+	absl::flat_hash_set<ServerID> covered;
+	std::vector<std::vector<Queries::Query>> buckets;
+
+	for (Queries::Query query : queries) {
+		size_t querySize = query.size();
 
 		if (querySize >= buckets.size())
 			buckets.resize(querySize + 1);
 
 		if (querySize > 0)
-			buckets[querySize].push_back(queryIndex);
+			buckets[querySize].push_back(query);
 	}
 
 	if (buckets.empty())
-		return result;
+		return 0;
 
 	for (size_t bucketIndex = buckets.size() - 1; bucketIndex > 0; bucketIndex--) {
-		for (size_t queryIndex : buckets[bucketIndex]) {
-			Queries::Query query = queries[queryIndex];
-
+		for (Queries::Query query : buckets[bucketIndex]) {
 			size_t actualSize = query.size();
 
-			for (Server::ID serverID : query)
+			for (ServerID serverID : query)
 				if (covered.contains(serverID))
 					actualSize--;
 
 			if (actualSize == bucketIndex) {
-				for (Server::ID serverID : query)
+				for (ServerID serverID : query)
 					covered.insert(serverID);
 
 				result.emplace_back(query.getLocation());
 			} else if (actualSize > 0) {
-				buckets[actualSize].push_back(queryIndex);
+				buckets[actualSize].push_back(query);
 			}
 		}
 	}
 
-	std::cout << "Covered " << covered.size() << " servers using " << result.size() << " search ranges" << std::endl;
-
-	return result;
-}
-
-std::vector<Server> parseServers(const std::string& inputFile) {
-	simdjson::ondemand::parser jsonParser;
-	simdjson::padded_string jsonString = simdjson::padded_string::load(inputFile);
-
-	std::vector<Server> servers;
-
-	for (auto server : jsonParser.iterate(jsonString)) {
-		Server::ID serverID = server["server_id"].get_int64();
-		std::string_view lat = server["latitude"];
-		std::string_view lon = server["longtitude"];
-		servers.emplace_back(serverID, GeographicPoint(lat, lon));
-	}
-
-	return servers;
+	return covered.size();
 }
 
 namespace simdjson {
@@ -398,21 +557,125 @@ namespace simdjson {
 	}
 }
 
-int main(int argc, const char** argv) {
-	if (argc != 3) {
-		std::cout << "Usage: " << argv[0] << " [input file] [output file]" << std::endl;
+static void dumpSetCover(const std::string& outputFile, const Queries& queries) {
+	std::ofstream outputStream(outputFile);
+
+	absl::flat_hash_set<ServerID> servers;
+
+	for (Queries::Query query : queries)
+		for (ServerID serverID : query)
+			servers.insert(serverID);
+
+	outputStream << "NAME SET_COVER" << std::endl;
+
+	outputStream << "OBJSENSE MIN" << std::endl;
+
+	outputStream << "ROWS" << std::endl;
+
+	outputStream
+		<< " "
+		<< "N" << " "
+		<< "SETS_COUNT" << std::endl;
+
+	for (ServerID serverID : servers) {
+		outputStream
+			<< " "
+			<< "G" << " "
+			<< "S" << serverID << std::endl;
+	}
+
+	outputStream << "COLUMNS" << std::endl;
+
+	size_t queryIndex = 0;
+	for (Queries::Query query : queries) {
+		outputStream
+			<< " "
+			<< " "
+			<< "Q" << queryIndex << " "
+			<< "SETS_COUNT" << " "
+			<< "1" << std::endl;
+
+		for (ServerID serverID : query) {
+			outputStream
+				<< " "
+				<< " "
+				<< "Q" << queryIndex << " "
+				<< "S" << serverID << " "
+				<< "1" << std::endl;
+		}
+
+		queryIndex++;
+	}
+
+	outputStream << "RHS" << std::endl;
+
+	for (ServerID serverID : servers) {
+		outputStream
+			<< " "
+			<< " "
+			<< "R" << " "
+			<< "S" << serverID << " "
+			<< "1" << std::endl;
+	}
+
+	outputStream << "BOUNDS" << std::endl;
+
+	for (size_t columnIndex = 0; columnIndex < queryIndex; columnIndex++) {
+		outputStream
+			<< " "
+			<< "BV" << " "
+			<< "B" << " "
+			<< "Q" << columnIndex << std::endl;
+	}
+
+	outputStream << "ENDATA" << std::endl;
+}
+
+static void dumpPoints(const std::string& outputFile, const std::vector<GeographicPoint>& points) {
+	std::ofstream outputStream(outputFile);
+	outputStream << simdjson::to_json(points) << std::endl;
+}
+
+ABSL_FLAG(std::optional<std::string>, servers, std::nullopt, "Input file containing server list in JSON format");
+ABSL_FLAG(std::optional<std::string>, plan, std::nullopt, "Output file for storing planned queries in JSON format");
+ABSL_FLAG(std::optional<std::string>, setcover, std::nullopt, "If specified, output file for storing the set cover problem instance as a BIP (using CPLEX MPS format)");
+ABSL_FLAG(size_t, points, 1 << 20, "Number of points to sample");
+
+int main(int argc, char** argv) {
+	absl::SetProgramUsageMessage("Query planner for server fetcher");
+
+	absl::ParseCommandLine(argc, argv);
+
+	if (!absl::GetFlag(FLAGS_servers)) {
+		std::cout << "Input server list is not provided. See --help for details." << std::endl;
 		return 1;
 	}
 
-	std::vector<Server> servers = parseServers(argv[1]);
+	if (!absl::GetFlag(FLAGS_plan)) {
+		std::cout << "Output file name for planned queries is not provided. See --help for details." << std::endl;
+		return 1;
+	}
 
-	RangeBuilder builder(servers.begin(), servers.end());
-	Queries queries = builder.build(RandomPointGenerator(), 1000000);
+	std::string serversFile = absl::GetFlag(FLAGS_servers).value();
+	std::string planFile = absl::GetFlag(FLAGS_plan).value();
+	std::optional<std::string> setCoverFile = absl::GetFlag(FLAGS_setcover);
+	size_t pointsCount = absl::GetFlag(FLAGS_points);
 
-	std::vector<GeographicPoint> pruned = pruneQueries(queries);
+	ServerList serverList(serversFile);
 
-	std::ofstream queryPlan(argv[2]);
-	queryPlan << simdjson::to_json(pruned) << std::endl;
+	QueryBuilder builder(serverList.begin(), serverList.end());
+	Queries queries(pointsCount);
+	builder.build(queries, RandomPointGenerator(), pointsCount);
+
+	if (setCoverFile.has_value())
+		dumpSetCover(setCoverFile.value(), queries);
+
+	std::vector<GeographicPoint> pruned;
+	size_t covered = pruneQueries(pruned, queries);
+
+	std::cout << "Covered " << covered << " servers using " << pruned.size() << " search queries." << std::endl;
+
+	dumpPoints(planFile, pruned);
 
 	return 0;
 }

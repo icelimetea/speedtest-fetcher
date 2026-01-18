@@ -52,7 +52,8 @@ class ServerAccumulator:
                 self.tags_count += 1
 
     def close(self):
-        tags_consumed, self.tags_count = self.tags_count, 0
+        tags_consumed = self.tags_count
+        self.tags_count = 0
         return tags_consumed
 
     def get_servers(self):
@@ -121,6 +122,8 @@ def fetch_servers_json(query_plan):
                 for server in http_response.json()["servers"]:
                     result.add(Server(server))
 
+                print(f"Fetched {len(result)} servers so far")
+
                 query = next(query_iterator)
         except StopIteration:
             return list(result)
@@ -129,7 +132,7 @@ def fetch_servers_json(query_plan):
 def main():
     args_parser = ArgumentParser()
     args_parser.add_argument("--plan", help="Query plan file")
-    args_parser.add_argument("--output", help="Output JSON filename", required=True)
+    args_parser.add_argument("--output", help="Output JSON file", required=True)
     args = args_parser.parse_args()
 
     with open(args.output, "w") as out_fd:

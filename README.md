@@ -20,8 +20,20 @@ You can use query planner together with fetcher like so:
 
 ```sh
 $ ./fetch_servers --output servers.json                           # Fetch a preliminary server list (for query planner)
-$ ./query_planner servers.json plan.json                          # Generate a query plan and save it to plan.json
+$ ./query_planner --servers servers.json --plan plan.json         # Generate a query plan and save it to plan.json
 $ ./fetch_servers --plan plan.json --output servers_extra.json    # Fetch servers using a plan
 ```
 
-Query planner is written in C++ and depends on CGAL and simdjson.
+Query planner is written in C++ and depends on:
+* abseil
+* CGAL
+* simdjson
+
+It can be built using CMake:
+
+```sh
+$ git clone 'https://github.com/icelimetea/speedtest-fetcher.git'
+$ cd speedtest-fetcher
+$ cmake -DCMAKE_BUILD_TYPE=Release .
+$ cmake --build .
+```
