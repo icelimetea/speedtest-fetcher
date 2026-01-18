@@ -1,0 +1,146 @@
+#!/usr/bin/env python3
+
+from argparse import ArgumentParser
+from lxml import etree
+import requests
+import time
+import json
+
+SPEEDTEST_CONFIG_URL_XML = "https://www.speedtest.net/api/android/config.php"
+SPEEDTEST_CONFIG_URL_JSON = "https://www.speedtest.net/api/js/config-sdk.php"
+SPEEDTEST_REQ_DELAY = 1
+
+
+class Server:
+    def __init__(self, attrib):
+        self.server_id = int(attrib["id"])
+        self.latitude = attrib["lat"]
+        self.longtitude = attrib["lon"]
+        self.location_name = attrib["name"]
+        self.sponsor = attrib["sponsor"]
+        self.test_url = attrib["url"]
+        self.test_host = attrib["host"]
+        self.country_code = attrib.get("cc")
+        self.https_functional = attrib.get("https_functional")
+
+    def __hash__(self):
+        return hash(self.server_id)
+
+    def __eq__(self, other):
+        if not isinstance(other, Server):
+            return False
+
+        return self.server_id == other.server_id
+
+    def to_dict(self):
+        return vars(self)
+
+
+class ServerAccumulator:
+    def __init__(self):
+        self.servers = []
+        self.seen = set()
+        self.tags_count = 0
+
+    def start(self, tag, attrib):
+        if tag == "server":
+            server = Server(attrib)
+
+            if server not in self.seen:
+                self.seen.add(server)
+                self.servers.append(server)
+                self.tags_count += 1
+
+    def close(self):
+        tags_consumed, self.tags_count = self.tags_count, 0
+        return tags_consumed
+
+    def get_servers(self):
+        return self.servers
+
+
+def fetch_servers_xml():
+    with requests.Session() as http_session:
+        page_size = -1
+        page_offset = 0
+
+        server_accum = ServerAccumulator()
+        xml_parser = etree.XMLParser(target=server_accum)
+
+        last_req_time = time.time()
+
+        while page_size != 0:
+            time.sleep(max(0, SPEEDTEST_REQ_DELAY - (time.time() - last_req_time)))
+
+            last_req_time = time.time()
+
+            http_response = http_session.get(SPEEDTEST_CONFIG_URL_XML, params={
+                "appversion": "5",
+                "offset": page_offset
+            })
+
+            if http_response.status_code != 200:
+                print(f"Received HTTP {http_response.status_code}. Retrying...")
+                continue
+
+            page_size = etree.fromstring(http_response.content, parser=xml_parser)
+            page_offset += page_size
+
+            print(f"Fetched {len(server_accum.get_servers())} servers so far")
+
+        return server_accum.get_servers()
+
+
+def fetch_servers_json(query_plan):
+    with requests.Session() as http_session:
+        result = set()
+
+        query_iterator = iter(query_plan)
+
+        last_req_time = time.time()
+
+        try:
+            query = next(query_iterator)
+
+            while True:
+                time.sleep(max(0, SPEEDTEST_REQ_DELAY - (time.time() - last_req_time)))
+
+                last_req_time = time.time()
+
+                http_response = http_session.get(SPEEDTEST_CONFIG_URL_JSON, params={
+                    "engine": "js",
+                    "limit": 100,
+                    "lat": query["latitude"],
+                    "lon": query["longtitude"]
+                })
+
+                if http_response.status_code != 200:
+                    print(f"Received HTTP {http_response.status_code}. Retrying...")
+                    continue
+
+                for server in http_response.json()["servers"]:
+                    result.add(Server(server))
+
+                query = next(query_iterator)
+        except StopIteration:
+            return list(result)
+
+
+def main():
+    args_parser = ArgumentParser()
+    args_parser.add_argument("--plan", help="Query plan file")
+    args_parser.add_argument("--output", help="Output JSON filename", required=True)
+    args = args_parser.parse_args()
+
+    with open(args.output, "w") as out_fd:
+        if args.plan is not None:
+            with open(args.plan) as plan_fd:
+                server_list = fetch_servers_json(json.load(plan_fd))
+        else:
+            server_list = fetch_servers_xml()
+
+        json.dump([ server.to_dict() for server in server_list ], out_fd)
+
+
+if __name__ == "__main__":
+    main()
