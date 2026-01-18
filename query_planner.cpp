@@ -22,6 +22,8 @@ using SphericalDelaunay = CGAL::Delaunay_triangulation_on_sphere_2<SphericalDela
 
 using Point3 = SphericalDelaunay::Point_3;
 
+using ServerID = int32_t;
+
 constexpr double EARTH_RADIUS_MILES = 3963.1676;
 
 constexpr size_t SHORT_RANGE_SERVERS = 100;
@@ -48,8 +50,8 @@ public:
 	}
 
 	GeographicPoint(const Point3& point) {
-		this->lat = std::asin(point.hz() / point.hw()) * 180 / std::numbers::pi;
-		this->lon = std::atan2(point.hy(), point.hx()) * 180 / std::numbers::pi;
+		this->lat = std::asin(point.z()) * 180 / std::numbers::pi;
+		this->lon = std::atan2(point.y(), point.x()) * 180 / std::numbers::pi;
 	}
 
 	double getLatitude() const {
@@ -69,26 +71,6 @@ public:
 		double z = std::sin(latRad);
 
 		return Point3(x, y, z);
-	}
-};
-
-class Server {
-public:
-	using ID = int32_t;
-private:
-	Server::ID id;
-	GeographicPoint location;
-public:
-	Server(Server::ID serverID, GeographicPoint location) :
-		id(serverID),
-		location(location) {}
-
-	Server::ID getID() const {
-		return this->id;
-	}
-
-	const GeographicPoint& getLocation() const {
-		return this->location;
 	}
 };
 
@@ -117,14 +99,14 @@ public:
 
 class Queries {
 private:
-	using ServerIterator = std::vector<Server::ID>::const_iterator;
+	using ServerIterator = std::vector<ServerID>::const_iterator;
 
 	struct QueryTag {
 		Point3 location;
 		size_t endIndex;
 	};
 
-	std::vector<Server::ID> servers;
+	std::vector<ServerID> servers;
 	std::vector<QueryTag> queries;
 public:
 	class Query {
@@ -179,7 +161,7 @@ public:
 		this->queries.emplace_back(location, this->servers.size());
 	}
 
-	void insertServer(Server::ID serverID) {
+	void insertServer(ServerID serverID) {
 		this->servers.push_back(serverID);
 	}
 
@@ -194,14 +176,14 @@ public:
 	Query operator[](size_t index) const {
 		size_t serversStart = this->queries[index].endIndex;
 		size_t serversEnd = this->queries[index + 1].endIndex;
-		return Query(this->queries[index + 1].location, this->servers.begin() + serversStart, this->servers.begin() + serversEnd);
+		return Query(this->queries[index + 1].location, this->servers.cbegin() + serversStart, this->servers.cbegin() + serversEnd);
 	}
 };
 
-class RangeBuilder {
+class QueryBuilder {
 private:
 	SphericalDelaunay delaunay;
-	std::unordered_map<SphericalDelaunay::Vertex_handle, std::vector<Server::ID>> buckets;
+	std::unordered_map<SphericalDelaunay::Vertex_handle, std::vector<ServerID>> buckets;
 
 	struct Neighbour {
 		SphericalDelaunay::Vertex_handle vertex;
@@ -210,7 +192,7 @@ private:
 		Neighbour(const Point3& origin, const SphericalDelaunay& delaunay, SphericalDelaunay::Vertex_handle vertexHandle) :
 			vertex(vertexHandle) {
 			const Point3& location = delaunay.point(vertexHandle);
-			this->distance = (origin.hx() * location.hx() + origin.hy() * location.hy() + origin.hz() * location.hz()) / (origin.hw() * location.hw());
+			this->distance = origin.x() * location.x() + origin.y() * location.y() + origin.z() * location.z();
 		}
 
 		bool operator<(const Neighbour& other) const {
@@ -236,7 +218,7 @@ private:
 				return;
 			}
 
-			for (Server::ID serverID : this->buckets.at(neighbour.vertex)) {
+			for (ServerID serverID : this->buckets.at(neighbour.vertex)) {
 				if (queries.bufferedServers() >= limit) {
 					queries.endQuery(origin);
 					return;
@@ -264,13 +246,25 @@ private:
 		queries.endQuery(origin);
 	}
 public:
-	template <typename ServerIt>
-	RangeBuilder(ServerIt begin, ServerIt end) {
-		for (ServerIt it = begin; it != end; it++) {
-			const Server& server = *it;
-			SphericalDelaunay::Vertex_handle vertex = this->delaunay.insert(server.getLocation().toPoint());
-			this->buckets[vertex].push_back(server.getID());
-		}
+	QueryBuilder() = default;
+
+	QueryBuilder(const QueryBuilder& other) = delete;
+
+	QueryBuilder(QueryBuilder&& other) noexcept :
+		delaunay(std::move(other.delaunay)),
+		buckets(std::move(other.buckets)) {}
+
+	QueryBuilder& operator=(const QueryBuilder& other) = delete;
+
+	QueryBuilder& operator=(QueryBuilder&& other) noexcept {
+		this->delaunay = std::move(other.delaunay);
+		this->buckets = std::move(other.buckets);
+		return *this;
+	}
+
+	void insert(ServerID serverID, const GeographicPoint& point) {
+		SphericalDelaunay::Vertex_handle vertex = this->delaunay.insert(point.toPoint());
+		this->buckets[vertex].push_back(serverID);
 	}
 
 	template <typename PointGenerator>
@@ -326,11 +320,25 @@ public:
 	}
 };
 
-std::vector<GeographicPoint> pruneQueries(const Queries& queries) {
-	std::unordered_set<Server::ID> covered;
-	std::vector<std::vector<size_t>> buckets;
+QueryBuilder parseServers(const std::string& inputFile) {
+	simdjson::ondemand::parser jsonParser;
+	simdjson::padded_string jsonString = simdjson::padded_string::load(inputFile);
 
-	std::vector<GeographicPoint> result;
+        QueryBuilder builder;
+
+	for (auto server : jsonParser.iterate(jsonString)) {
+		ServerID serverID = server["server_id"].get_int64();
+		std::string_view lat = server["latitude"];
+		std::string_view lon = server["longtitude"];
+		builder.insert(serverID, GeographicPoint(lat, lon));
+	}
+
+	return builder;
+}
+
+size_t pruneQueries(const Queries& queries, std::vector<GeographicPoint>& result) {
+	std::unordered_set<ServerID> covered;
+	std::vector<std::vector<size_t>> buckets;
 
 	for (size_t queryIndex = 0; queryIndex < queries.size(); queryIndex++) {
 		size_t querySize = queries[queryIndex].size();
@@ -343,7 +351,7 @@ std::vector<GeographicPoint> pruneQueries(const Queries& queries) {
 	}
 
 	if (buckets.empty())
-		return result;
+		return 0;
 
 	for (size_t bucketIndex = buckets.size() - 1; bucketIndex > 0; bucketIndex--) {
 		for (size_t queryIndex : buckets[bucketIndex]) {
@@ -351,12 +359,12 @@ std::vector<GeographicPoint> pruneQueries(const Queries& queries) {
 
 			size_t actualSize = query.size();
 
-			for (Server::ID serverID : query)
+			for (ServerID serverID : query)
 				if (covered.contains(serverID))
 					actualSize--;
 
 			if (actualSize == bucketIndex) {
-				for (Server::ID serverID : query)
+				for (ServerID serverID : query)
 					covered.insert(serverID);
 
 				result.emplace_back(query.getLocation());
@@ -366,25 +374,7 @@ std::vector<GeographicPoint> pruneQueries(const Queries& queries) {
 		}
 	}
 
-	std::cout << "Covered " << covered.size() << " servers using " << result.size() << " search ranges" << std::endl;
-
-	return result;
-}
-
-std::vector<Server> parseServers(const std::string& inputFile) {
-	simdjson::ondemand::parser jsonParser;
-	simdjson::padded_string jsonString = simdjson::padded_string::load(inputFile);
-
-	std::vector<Server> servers;
-
-	for (auto server : jsonParser.iterate(jsonString)) {
-		Server::ID serverID = server["server_id"].get_int64();
-		std::string_view lat = server["latitude"];
-		std::string_view lon = server["longtitude"];
-		servers.emplace_back(serverID, GeographicPoint(lat, lon));
-	}
-
-	return servers;
+        return covered.size();
 }
 
 namespace simdjson {
@@ -404,12 +394,13 @@ int main(int argc, const char** argv) {
 		return 1;
 	}
 
-	std::vector<Server> servers = parseServers(argv[1]);
-
-	RangeBuilder builder(servers.begin(), servers.end());
+	QueryBuilder builder = parseServers(argv[1]);
 	Queries queries = builder.build(RandomPointGenerator(), 1000000);
 
-	std::vector<GeographicPoint> pruned = pruneQueries(queries);
+	std::vector<GeographicPoint> pruned;
+	size_t covered = pruneQueries(queries, pruned);
+
+	std::cout << "Covered " << covered << " servers using " << pruned.size() << " search queries." << std::endl;
 
 	std::ofstream queryPlan(argv[2]);
 	queryPlan << simdjson::to_json(pruned) << std::endl;
