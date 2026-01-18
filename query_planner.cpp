@@ -324,7 +324,7 @@ QueryBuilder parseServers(const std::string& inputFile) {
 	simdjson::ondemand::parser jsonParser;
 	simdjson::padded_string jsonString = simdjson::padded_string::load(inputFile);
 
-        QueryBuilder builder;
+	QueryBuilder builder;
 
 	for (auto server : jsonParser.iterate(jsonString)) {
 		ServerID serverID = server["server_id"].get_int64();
@@ -374,7 +374,7 @@ size_t pruneQueries(const Queries& queries, std::vector<GeographicPoint>& result
 		}
 	}
 
-        return covered.size();
+	return covered.size();
 }
 
 namespace simdjson {
