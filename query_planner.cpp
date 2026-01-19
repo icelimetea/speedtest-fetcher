@@ -3,15 +3,16 @@
 #include <numbers>
 #include <limits>
 #include <vector>
-#include <unordered_map>
-#include <unordered_set>
 #include <algorithm>
 #include <charconv>
 #include <random>
 #include <fstream>
 
+#include <absl/container/flat_hash_set.h>
+
 #include <simdjson.h>
 
+#include <CGAL/Unique_hash_map.h>
 #include <CGAL/Exact_predicates_inexact_constructions_kernel.h>
 #include <CGAL/Delaunay_triangulation_on_sphere_traits_2.h>
 #include <CGAL/Delaunay_triangulation_on_sphere_2.h>
@@ -182,8 +183,11 @@ public:
 
 class QueryBuilder {
 private:
+	using VertexSet = absl::flat_hash_set<SphericalDelaunay::Vertex_handle>;
+	using VertexMap = CGAL::Unique_hash_map<SphericalDelaunay::Vertex_handle, std::vector<ServerID>>;
+
 	SphericalDelaunay delaunay;
-	std::unordered_map<SphericalDelaunay::Vertex_handle, std::vector<ServerID>> buckets;
+	VertexMap buckets;
 
 	struct Neighbour {
 		SphericalDelaunay::Vertex_handle vertex;
@@ -202,7 +206,7 @@ private:
 
 	void dijkstraSearch(const Point3& origin,
 			    std::vector<Neighbour>& vertices,
-			    std::unordered_set<SphericalDelaunay::Vertex_handle>& reached,
+			    VertexSet& reached,
 			    Queries& queries) const {
 		while (!vertices.empty()) {
 			const Neighbour& neighbour = vertices.front();
@@ -218,7 +222,7 @@ private:
 				return;
 			}
 
-			for (ServerID serverID : this->buckets.at(neighbour.vertex)) {
+			for (ServerID serverID : this->buckets[neighbour.vertex]) {
 				if (queries.bufferedServers() >= limit) {
 					queries.endQuery(origin);
 					return;
@@ -270,9 +274,12 @@ public:
 	template <typename PointGenerator>
 	Queries build(PointGenerator generator, size_t points) {
 		std::vector<Neighbour> vertices;
-		std::unordered_set<SphericalDelaunay::Vertex_handle> reached;
+		VertexSet reached;
 
 		Queries queries(points);
+
+		vertices.reserve(this->delaunay.number_of_vertices());
+		reached.reserve(this->delaunay.number_of_vertices());
 
 		for (size_t count = 0; count < points; count++) {
 			Point3 origin = generator();
@@ -282,7 +289,7 @@ public:
 
 			SphericalDelaunay::Vertex_handle inserted = this->delaunay.insert(origin);
 
-			if (!this->buckets.contains(inserted)) {
+			if (!this->buckets.is_defined(inserted)) {
 				auto incidents = this->delaunay.incident_vertices(inserted);
 				auto nextVertex = incidents;
 
@@ -337,7 +344,7 @@ QueryBuilder parseServers(const std::string& inputFile) {
 }
 
 size_t pruneQueries(const Queries& queries, std::vector<GeographicPoint>& result) {
-	std::unordered_set<ServerID> covered;
+	absl::flat_hash_set<ServerID> covered;
 	std::vector<std::vector<size_t>> buckets;
 
 	for (size_t queryIndex = 0; queryIndex < queries.size(); queryIndex++) {
