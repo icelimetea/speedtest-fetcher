@@ -24,7 +24,12 @@ $ ./query_planner servers.json plan.json                          # Generate a q
 $ ./fetch_servers --plan plan.json --output servers_extra.json    # Fetch servers using a plan
 ```
 
-Query planner is written in C++ and depends on CGAL and simdjson. It can be build using CMake:
+Query planner is written in C++ and depends on:
+* abseil
+* CGAL
+* simdjson
+
+It can be build using CMake:
 
 ```sh
 $ git clone 'https://github.com/icelimetea/speedtest-fetcher.git'
