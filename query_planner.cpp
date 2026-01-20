@@ -254,20 +254,10 @@ public:
 
 	QueryBuilder(const QueryBuilder& other) = delete;
 
-	QueryBuilder(QueryBuilder&& other) noexcept :
-		delaunay(std::move(other.delaunay)),
-		buckets(std::move(other.buckets)) {}
-
 	QueryBuilder& operator=(const QueryBuilder& other) = delete;
 
-	QueryBuilder& operator=(QueryBuilder&& other) noexcept {
-		this->delaunay = std::move(other.delaunay);
-		this->buckets = std::move(other.buckets);
-		return *this;
-	}
-
-	void insert(ServerID serverID, const GeographicPoint& point) {
-		SphericalDelaunay::Vertex_handle vertex = this->delaunay.insert(point.toPoint());
+	void insert(ServerID serverID, const Point3& point) {
+		SphericalDelaunay::Vertex_handle vertex = this->delaunay.insert(point);
 		this->buckets[vertex].push_back(serverID);
 	}
 
@@ -327,20 +317,16 @@ public:
 	}
 };
 
-QueryBuilder parseServers(const std::string& inputFile) {
+void parseServers(QueryBuilder& builder, const std::string& inputFile) {
 	simdjson::ondemand::parser jsonParser;
 	simdjson::padded_string jsonString = simdjson::padded_string::load(inputFile);
-
-	QueryBuilder builder;
 
 	for (auto server : jsonParser.iterate(jsonString)) {
 		ServerID serverID = server["server_id"].get_int64();
 		std::string_view lat = server["latitude"];
 		std::string_view lon = server["longtitude"];
-		builder.insert(serverID, GeographicPoint(lat, lon));
+		builder.insert(serverID, GeographicPoint(lat, lon).toPoint());
 	}
-
-	return builder;
 }
 
 size_t pruneQueries(const Queries& queries, std::vector<GeographicPoint>& result) {
@@ -401,7 +387,9 @@ int main(int argc, const char** argv) {
 		return 1;
 	}
 
-	QueryBuilder builder = parseServers(argv[1]);
+	QueryBuilder builder;
+	parseServers(builder, argv[1]);
+
 	Queries queries = builder.build(RandomPointGenerator(), 1000000);
 
 	std::vector<GeographicPoint> pruned;
