@@ -14,28 +14,44 @@
 
 #include <CGAL/Unique_hash_map.h>
 #include <CGAL/Exact_predicates_inexact_constructions_kernel.h>
+#include <CGAL/spatial_sort_on_sphere.h>
 #include <CGAL/Delaunay_triangulation_on_sphere_traits_2.h>
 #include <CGAL/Delaunay_triangulation_on_sphere_2.h>
 
 using LinearKernel = CGAL::Exact_predicates_inexact_constructions_kernel;
-using SphericalDelaunayTraits = CGAL::Delaunay_triangulation_on_sphere_traits_2<LinearKernel>;
-using SphericalDelaunay = CGAL::Delaunay_triangulation_on_sphere_2<SphericalDelaunayTraits>;
 
-using Point3 = SphericalDelaunay::Point_3;
+using Point3 = LinearKernel::Point_3;
 
 using ServerID = int32_t;
 
-constexpr double EARTH_RADIUS_MILES = 3963.1676;
+constexpr size_t USUAL_SERVERS_COUNT = 1 << 14;
 
 constexpr size_t SHORT_RANGE_SERVERS = 100;
 constexpr size_t LONG_RANGE_SERVERS = 20;
-constexpr size_t MAX_SERVERS = std::max(SHORT_RANGE_SERVERS, LONG_RANGE_SERVERS);
+constexpr size_t MAX_SERVERS_PER_RANGE = std::max(SHORT_RANGE_SERVERS, LONG_RANGE_SERVERS);
 
-constexpr double SHORT_SEARCH_RANGE = 30.0;
-constexpr double LONG_SEARCH_RANGE = 2000.0;
+class Angle {
+private:
+	double cos;
+public:
+	Angle(LinearKernel::FT radians) :
+		cos(std::cos(radians)) {}
 
-const double SHORT_RANGE_COSINE = std::cos(SHORT_SEARCH_RANGE / EARTH_RADIUS_MILES);
-const double LONG_RANGE_COSINE = std::cos(LONG_SEARCH_RANGE / EARTH_RADIUS_MILES);
+	Angle(const Point3& p1, const Point3& p2) :
+		cos(p1.x() * p2.x() + p1.y() * p2.y() + p1.z() * p2.z()) {}
+
+	LinearKernel::FT cosine() const {
+		return this->cos;
+	}
+
+	friend bool operator<(const Angle& lhs, const Angle& rhs) {
+		return lhs.cos > rhs.cos;
+	}
+
+	friend bool operator>(const Angle& lhs, const Angle& rhs) {
+		return lhs.cos < rhs.cos;
+	}
+};
 
 class GeographicPoint {
 private:
@@ -55,11 +71,11 @@ public:
 		this->lon = std::atan2(point.y(), point.x()) * 180 / std::numbers::pi;
 	}
 
-	double getLatitude() const {
+	LinearKernel::FT getLatitude() const {
 		return this->lat;
 	}
 
-	double getLongtitude() const {
+	LinearKernel::FT getLongtitude() const {
 		return this->lon;
 	}
 
@@ -139,24 +155,14 @@ public:
 	};
 
 	Queries(size_t queryCount) {
-		this->servers.reserve(MAX_SERVERS * queryCount);
+		this->servers.reserve(MAX_SERVERS_PER_RANGE * queryCount);
 		this->queries.reserve(queryCount);
 		this->endQuery(Point3());
 	}
 
 	Queries(const Queries& other) = delete;
 
-	Queries(Queries&& other) noexcept :
-		servers(std::move(other.servers)),
-		queries(std::move(other.queries)) {}
-
 	Queries& operator=(const Queries& other) = delete;
-
-	Queries& operator=(Queries&& other) noexcept {
-		this->servers = std::move(other.servers);
-		this->queries = std::move(other.queries);
-		return *this;
-	}
 
 	void endQuery(const Point3& location) {
 		this->queries.emplace_back(location, this->servers.size());
@@ -183,24 +189,37 @@ public:
 
 class QueryBuilder {
 private:
-	using VertexSet = absl::flat_hash_set<SphericalDelaunay::Vertex_handle>;
-	using VertexMap = CGAL::Unique_hash_map<SphericalDelaunay::Vertex_handle, std::vector<ServerID>>;
+	using SphericalDelaunayTraits = CGAL::Delaunay_triangulation_on_sphere_traits_2<LinearKernel>;
+	using SphericalDelaunay = CGAL::Delaunay_triangulation_on_sphere_2<SphericalDelaunayTraits>;
+
+	using VertexHandle = SphericalDelaunay::Vertex_handle;
+	using FaceHandle = SphericalDelaunay::Face_handle;
+
+	using VertexSet = absl::flat_hash_set<VertexHandle>;
+	using VertexMap = CGAL::Unique_hash_map<VertexHandle, std::vector<ServerID>>;
 
 	SphericalDelaunay delaunay;
 	VertexMap buckets;
 
-	struct Neighbour {
-		SphericalDelaunay::Vertex_handle vertex;
-		SphericalDelaunay::FT distance;
+	static constexpr double EARTH_RADIUS_MILES = 3963.1676;
 
-		Neighbour(const Point3& origin, const SphericalDelaunay& delaunay, SphericalDelaunay::Vertex_handle vertexHandle) :
-			vertex(vertexHandle) {
-			const Point3& location = delaunay.point(vertexHandle);
-			this->distance = origin.x() * location.x() + origin.y() * location.y() + origin.z() * location.z();
+	inline static const Angle SHORT_RANGE_ANGLE = Angle(30.0 / EARTH_RADIUS_MILES);
+	inline static const Angle LONG_RANGE_ANGLE = Angle(2000.0 / EARTH_RADIUS_MILES);
+
+	struct Neighbour {
+		VertexHandle vertex;
+		Angle distance;
+
+		Neighbour(const Point3& origin, const SphericalDelaunay& delaunay, VertexHandle vertexHandle) :
+			vertex(vertexHandle),
+			distance(origin, delaunay.point(vertexHandle)) {}
+
+		friend bool operator<(const Neighbour& lhs, const Neighbour& rhs) {
+			return lhs.distance < rhs.distance;
 		}
 
-		bool operator<(const Neighbour& other) const {
-			return this->distance < other.distance;
+		friend bool operator>(const Neighbour& lhs, const Neighbour& rhs) {
+			return lhs.distance > rhs.distance;
 		}
 	};
 
@@ -213,9 +232,9 @@ private:
 
 			size_t limit;
 
-			if (neighbour.distance > SHORT_RANGE_COSINE) {
+			if (neighbour.distance < SHORT_RANGE_ANGLE) {
 				limit = SHORT_RANGE_SERVERS;
-			} else if (neighbour.distance > LONG_RANGE_COSINE) {
+			} else if (neighbour.distance < LONG_RANGE_ANGLE) {
 				limit = LONG_RANGE_SERVERS;
 			} else {
 				queries.endQuery(origin);
@@ -234,13 +253,13 @@ private:
 			auto incidents = this->delaunay.incident_vertices(neighbour.vertex);
 			auto nextVertex = incidents;
 
-			std::pop_heap(vertices.begin(), vertices.end());
+			std::pop_heap(vertices.begin(), vertices.end(), std::greater{});
 			vertices.pop_back();
 
 			do {
 				if (reached.insert(nextVertex).second) {
 					vertices.emplace_back(origin, this->delaunay, nextVertex);
-					std::push_heap(vertices.begin(), vertices.end());
+					std::push_heap(vertices.begin(), vertices.end(), std::greater{});
 				}
 
 				nextVertex++;
@@ -250,23 +269,26 @@ private:
 		queries.endQuery(origin);
 	}
 public:
-	QueryBuilder() = default;
+	QueryBuilder(std::vector<Point3>& locations, const std::vector<ServerID>& servers) {
+	        CGAL::spatial_sort_on_sphere(locations.begin(), locations.end());
+
+		FaceHandle loc;
+
+		for (size_t index = 0; index < locations.size(); index++) {
+			VertexHandle vertex = this->delaunay.insert(locations[index], loc);
+			this->buckets[vertex].push_back(servers[index]);
+			loc = vertex->face();
+		}
+	}
 
 	QueryBuilder(const QueryBuilder& other) = delete;
 
 	QueryBuilder& operator=(const QueryBuilder& other) = delete;
 
-	void insert(ServerID serverID, const Point3& point) {
-		SphericalDelaunay::Vertex_handle vertex = this->delaunay.insert(point);
-		this->buckets[vertex].push_back(serverID);
-	}
-
 	template <typename PointGenerator>
-	Queries build(PointGenerator generator, size_t points) {
+	void build(Queries& queries, PointGenerator generator, size_t points) {
 		std::vector<Neighbour> vertices;
 		VertexSet reached;
-
-		Queries queries(points);
 
 		vertices.reserve(this->delaunay.number_of_vertices());
 		reached.reserve(this->delaunay.number_of_vertices());
@@ -277,9 +299,13 @@ public:
 			vertices.clear();
 			reached.clear();
 
-			SphericalDelaunay::Vertex_handle inserted = this->delaunay.insert(origin);
+			SphericalDelaunay::Locate_type lt;
+			int li;
+			FaceHandle loc = this->delaunay.locate(origin, lt, li, FaceHandle());
 
-			if (!this->buckets.is_defined(inserted)) {
+			if (lt != SphericalDelaunay::Locate_type::VERTEX && lt != SphericalDelaunay::Locate_type::TOO_CLOSE) {
+				VertexHandle inserted = this->delaunay.insert(origin, lt, loc, li);
+
 				auto incidents = this->delaunay.incident_vertices(inserted);
 				auto nextVertex = incidents;
 
@@ -297,27 +323,27 @@ public:
 					nextVertex++;
 				} while (nextVertex != incidents);
 
-				std::make_heap(vertices.begin(), vertices.end());
+				std::make_heap(vertices.begin(), vertices.end(), std::greater{});
 
 				this->dijkstraSearch(origin, vertices, reached, queries);
 
 				this->delaunay.remove(inserted);
 			} else {
-				if (this->delaunay.incident_vertices(inserted) == nullptr)
+				VertexHandle found = loc->vertex(li);
+
+				if (this->delaunay.incident_vertices(found) == nullptr)
 					throw std::invalid_argument("Delaunay triangulation is degenerate");
 
-				reached.insert(inserted);
-				vertices.emplace_back(origin, this->delaunay, inserted);
+				reached.insert(found);
+				vertices.emplace_back(origin, this->delaunay, found);
 
 				this->dijkstraSearch(origin, vertices, reached, queries);
 			}
 		}
-
-		return queries;
 	}
 };
 
-void parseServers(QueryBuilder& builder, const std::string& inputFile) {
+void parseServers(std::vector<Point3>& locations, std::vector<ServerID>& servers, const std::string& inputFile) {
 	simdjson::ondemand::parser jsonParser;
 	simdjson::padded_string jsonString = simdjson::padded_string::load(inputFile);
 
@@ -325,11 +351,12 @@ void parseServers(QueryBuilder& builder, const std::string& inputFile) {
 		ServerID serverID = server["server_id"].get_int64();
 		std::string_view lat = server["latitude"];
 		std::string_view lon = server["longtitude"];
-		builder.insert(serverID, GeographicPoint(lat, lon).toPoint());
+		locations.push_back(GeographicPoint(lat, lon).toPoint());
+		servers.push_back(serverID);
 	}
 }
 
-size_t pruneQueries(const Queries& queries, std::vector<GeographicPoint>& result) {
+size_t pruneQueries(std::vector<GeographicPoint>& result, const Queries& queries) {
 	absl::flat_hash_set<ServerID> covered;
 	std::vector<std::vector<size_t>> buckets;
 
@@ -387,13 +414,20 @@ int main(int argc, const char** argv) {
 		return 1;
 	}
 
-	QueryBuilder builder;
-	parseServers(builder, argv[1]);
+	std::vector<Point3> locations;
+	locations.reserve(USUAL_SERVERS_COUNT);
 
-	Queries queries = builder.build(RandomPointGenerator(), 1000000);
+	std::vector<ServerID> servers;
+	servers.reserve(USUAL_SERVERS_COUNT);
+
+	parseServers(locations, servers, argv[1]);
+
+	QueryBuilder builder(locations, servers);
+	Queries queries(1000000);
+	builder.build(queries, RandomPointGenerator(), 1000000);
 
 	std::vector<GeographicPoint> pruned;
-	size_t covered = pruneQueries(queries, pruned);
+	size_t covered = pruneQueries(pruned, queries);
 
 	std::cout << "Covered " << covered << " servers using " << pruned.size() << " search queries." << std::endl;
 
