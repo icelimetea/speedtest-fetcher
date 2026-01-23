@@ -115,74 +115,121 @@ public:
 
 class Queries {
 private:
-	using ServerIterator = std::vector<ServerID>::const_iterator;
-
 	struct QueryTag {
 		Point3 location;
-		size_t endIndex;
+		size_t size;
 	};
 
-	std::vector<ServerID> servers;
-	std::vector<QueryTag> queries;
+	union Item {
+		static constexpr size_t NUM_SERVERS = sizeof(QueryTag) / sizeof(ServerID);
+
+		QueryTag tag;
+		ServerID servers[NUM_SERVERS];
+
+		Item() {}
+
+		Item(const Point3& location) : tag(location, 0) {}
+	};
+
+	using Iterator = std::vector<Item>::const_iterator;
+
+	std::vector<Item> items;
+
+	size_t lastQueryIndex = 0;
 public:
+	class ServerIterator {
+	private:
+		Iterator itemIt;
+		size_t index;
+	public:
+		using difference_type = std::ptrdiff_t;
+		using value_type = ServerID;
+
+		ServerIterator(Iterator itemIterator, size_t index) :
+			itemIt(itemIterator + index / Item::NUM_SERVERS),
+			index(index % Item::NUM_SERVERS) {}
+
+		ServerID operator*() const {
+			return this->itemIt->servers[this->index];
+		}
+
+		ServerIterator& operator++() {
+			this->itemIt += (this->index + 1) / Item::NUM_SERVERS;
+			this->index = (this->index + 1) % Item::NUM_SERVERS;
+			return *this;
+		}
+
+		ServerIterator operator++(int) {
+			ServerIterator it = *this;
+			++*this;
+			return it;
+		}
+
+		bool operator==(const ServerIterator& other) const {
+			return this->itemIt == other.itemIt && this->index == other.index;
+		}
+	};
+
 	class Query {
 	private:
-		const Point3& location;
-		ServerIterator serversBegin;
-		ServerIterator serversEnd;
+		Iterator itemIt;
 	public:
-		Query(const Point3& location, ServerIterator begin, ServerIterator end) :
-			location(location),
-			serversBegin(begin),
-			serversEnd(end) {}
+		Query(Iterator itemIterator) : itemIt(itemIterator) {}
+
+		Query& operator++() {
+			this->itemIt += (this->itemIt->tag.size + Item::NUM_SERVERS - 1) / Item::NUM_SERVERS + 1;
+			return *this;
+		}
+
+		bool operator==(const Query& other) const {
+			return this->itemIt == other.itemIt;
+		}
 
 		const Point3& getLocation() const {
-			return this->location;
+			return this->itemIt->tag.location;
 		}
 
 		size_t size() const {
-			return this->serversEnd - this->serversBegin;
+			return this->itemIt->tag.size;
 		}
 
 		ServerIterator begin() const {
-			return this->serversBegin;
+			return ServerIterator(this->itemIt + 1, 0);
 		}
 
 		ServerIterator end() const {
-			return this->serversEnd;
+			return ServerIterator(this->itemIt + 1, this->itemIt->tag.size);
 		}
 	};
 
 	Queries(size_t queryCount) {
-		this->servers.reserve(MAX_SERVERS_PER_RANGE * queryCount);
-		this->queries.reserve(queryCount);
-		this->endQuery(Point3());
+		this->items.reserve(MAX_SERVERS_PER_RANGE * queryCount);
 	}
 
 	Queries(const Queries& other) = delete;
 
 	Queries& operator=(const Queries& other) = delete;
 
-	void endQuery(const Point3& location) {
-		this->queries.emplace_back(location, this->servers.size());
+	void beginQuery(const Point3& location) {
+		this->items.emplace_back(location);
+		this->lastQueryIndex = this->items.size() - 1;
 	}
 
 	void insertServer(ServerID serverID) {
-		this->servers.push_back(serverID);
+		size_t serverIndex = (this->items[this->lastQueryIndex].tag.size++) % Item::NUM_SERVERS;
+
+		if (serverIndex == 0)
+			this->items.emplace_back();
+
+		this->items.back().servers[serverIndex] = serverID;
 	}
 
-	size_t bufferedServers() const {
-		return this->servers.size() - this->queries.back().endIndex;
+	Query begin() const {
+		return Query(this->items.begin());
 	}
 
-	size_t size() const {
-		return this->queries.size() - 1;
-	}
-
-	Query operator[](size_t index) const {
-		size_t serversStart = this->queries[index].endIndex;
-		size_t serversEnd = this->queries[index + 1].endIndex;
-		return Query(this->queries[index + 1].location, this->servers.cbegin() + serversStart, this->servers.cbegin() + serversEnd);
+	Query end() const {
+		return Query(this->items.begin() + this->lastQueryIndex);
 	}
 };
 
@@ -226,6 +273,10 @@ private:
 			    std::vector<Neighbour>& vertices,
 			    VertexSet& reached,
 			    Queries& queries) const {
+		queries.beginQuery(origin);
+
+		size_t insertedServers = 0;
+
 		while (!vertices.empty()) {
 			const Neighbour& neighbour = vertices.front();
 
@@ -236,17 +287,16 @@ private:
 			} else if (neighbour.distance < LONG_RANGE_ANGLE) {
 				limit = LONG_RANGE_SERVERS;
 			} else {
-				queries.endQuery(origin);
 				return;
 			}
 
 			for (ServerID serverID : this->buckets[neighbour.vertex]) {
-				if (queries.bufferedServers() >= limit) {
-					queries.endQuery(origin);
+				if (insertedServers >= limit)
 					return;
-				}
 
 				queries.insertServer(serverID);
+
+				insertedServers++;
 			}
 
 			auto incidents = this->delaunay.incident_vertices(neighbour.vertex);
@@ -264,12 +314,10 @@ private:
 				nextVertex++;
 			} while (nextVertex != incidents);
 		}
-
-		queries.endQuery(origin);
 	}
 public:
 	QueryBuilder(std::vector<Point3>& locations, const std::vector<ServerID>& servers) {
-	        CGAL::spatial_sort_on_sphere(locations.begin(), locations.end());
+		CGAL::spatial_sort_on_sphere(locations.begin(), locations.end());
 
 		FaceHandle loc;
 
@@ -357,25 +405,23 @@ void parseServers(std::vector<Point3>& locations, std::vector<ServerID>& servers
 
 size_t pruneQueries(std::vector<GeographicPoint>& result, const Queries& queries) {
 	absl::flat_hash_set<ServerID> covered;
-	std::vector<std::vector<size_t>> buckets;
+	std::vector<std::vector<Queries::Query>> buckets;
 
-	for (size_t queryIndex = 0; queryIndex < queries.size(); queryIndex++) {
-		size_t querySize = queries[queryIndex].size();
+	for (Queries::Query query = queries.begin(); query != queries.end(); ++query) {
+		size_t querySize = query.size();
 
 		if (querySize >= buckets.size())
 			buckets.resize(querySize + 1);
 
 		if (querySize > 0)
-			buckets[querySize].push_back(queryIndex);
+			buckets[querySize].push_back(query);
 	}
 
 	if (buckets.empty())
 		return 0;
 
 	for (size_t bucketIndex = buckets.size() - 1; bucketIndex > 0; bucketIndex--) {
-		for (size_t queryIndex : buckets[bucketIndex]) {
-			Queries::Query query = queries[queryIndex];
-
+		for (Queries::Query query : buckets[bucketIndex]) {
 			size_t actualSize = query.size();
 
 			for (ServerID serverID : query)
@@ -388,7 +434,7 @@ size_t pruneQueries(std::vector<GeographicPoint>& result, const Queries& queries
 
 				result.emplace_back(query.getLocation());
 			} else if (actualSize > 0) {
-				buckets[actualSize].push_back(queryIndex);
+				buckets[actualSize].push_back(query);
 			}
 		}
 	}
