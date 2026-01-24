@@ -203,7 +203,7 @@ public:
 	};
 
 	Queries(size_t queryCount) {
-		this->items.reserve(MAX_SERVERS_PER_RANGE * queryCount);
+		this->items.reserve((1 + (MAX_SERVERS_PER_RANGE + Item::NUM_SERVERS - 1) / Item::NUM_SERVERS) * queryCount);
 	}
 
 	Queries(const Queries& other) = delete;
@@ -229,7 +229,7 @@ public:
 	}
 
 	Query end() const {
-		return Query(this->items.begin() + this->lastQueryIndex);
+		return Query(this->items.begin() + this->lastQueryIndex + 1);
 	}
 };
 
