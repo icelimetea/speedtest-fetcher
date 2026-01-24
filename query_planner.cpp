@@ -229,7 +229,7 @@ public:
 	}
 
 	Query end() const {
-		return Query(this->items.begin() + this->lastQueryIndex + 1);
+		return ++Query(this->items.begin() + this->lastQueryIndex);
 	}
 };
 
