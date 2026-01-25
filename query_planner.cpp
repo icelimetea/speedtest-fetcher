@@ -144,12 +144,21 @@ public:
 	public:
 		using difference_type = std::ptrdiff_t;
 		using value_type = ServerID;
+		using pointer = const ServerID*;
+		using reference = const ServerID&;
+		using iterator_category = std::forward_iterator_tag;
+
+		ServerIterator() = default;
+
+		ServerIterator(const ServerIterator& other):
+			itemIt(other.itemIt),
+			index(other.index) {}
 
 		ServerIterator(Iterator itemIterator, size_t index) :
 			itemIt(itemIterator + index / Item::NUM_SERVERS),
 			index(index % Item::NUM_SERVERS) {}
 
-		ServerID operator*() const {
+		const ServerID& operator*() const {
 			return this->itemIt->servers[this->index];
 		}
 
@@ -252,6 +261,26 @@ private:
 	inline static const Angle SHORT_RANGE_ANGLE = Angle(30.0 / EARTH_RADIUS_MILES);
 	inline static const Angle LONG_RANGE_ANGLE = Angle(2000.0 / EARTH_RADIUS_MILES);
 
+	struct NoOpEdgeIterator {
+		using difference_type = std::ptrdiff_t;
+		using value_type = void;
+		using pointer = void;
+		using reference = void;
+		using iterator_category = std::output_iterator_tag;
+
+		SphericalDelaunay::Edge operator*() {
+			return SphericalDelaunay::Edge();
+		}
+
+		NoOpEdgeIterator& operator++() {
+			return *this;
+		}
+
+		NoOpEdgeIterator operator++(int) {
+			return *this;
+		}
+	};
+
 	struct Neighbour {
 		VertexHandle vertex;
 		Angle distance;
@@ -315,6 +344,57 @@ private:
 			} while (nextVertex != incidents);
 		}
 	}
+
+	void build(Queries& queries, std::vector<Point3>& searchPoints) const {
+		std::vector<Neighbour> vertices;
+		vertices.reserve(this->delaunay.number_of_vertices());
+
+		std::vector<FaceHandle> faces;
+		faces.reserve(this->delaunay.number_of_faces());
+
+		VertexSet reached;
+		reached.reserve(this->delaunay.number_of_vertices());
+
+		CGAL::spatial_sort_on_sphere(searchPoints.begin(), searchPoints.end());
+
+		FaceHandle loc;
+
+		for (const Point3& origin : searchPoints) {
+			SphericalDelaunay::Locate_type lt;
+			int li;
+			loc = this->delaunay.locate(origin, lt, li, loc);
+
+			if (lt != SphericalDelaunay::Locate_type::VERTEX && lt != SphericalDelaunay::Locate_type::TOO_CLOSE) {
+				this->delaunay.get_conflicts_and_boundary(origin, std::back_inserter(faces), NoOpEdgeIterator(), loc);
+
+				for (FaceHandle face : faces) {
+					face->tds_data().clear();
+
+					for (int i = 0; i < 3; i++) {
+						VertexHandle vertex = face->vertex(i);
+
+						if (reached.insert(vertex).second)
+							vertices.emplace_back(origin, this->delaunay, vertex);
+					}
+				}
+
+				std::make_heap(vertices.begin(), vertices.end(), std::greater{});
+
+				this->dijkstraSearch(origin, vertices, reached, queries);
+			} else {
+				VertexHandle found = loc->vertex(li);
+
+				reached.insert(found);
+				vertices.emplace_back(origin, this->delaunay, found);
+
+				this->dijkstraSearch(origin, vertices, reached, queries);
+			}
+
+			vertices.clear();
+			faces.clear();
+			reached.clear();
+		}
+	}
 public:
 	QueryBuilder(std::vector<Point3>& locations, const std::vector<ServerID>& servers) {
 		CGAL::spatial_sort_on_sphere(locations.begin(), locations.end());
@@ -326,6 +406,9 @@ public:
 			this->buckets[vertex].push_back(servers[index]);
 			loc = vertex->face();
 		}
+
+		if (this->delaunay.dimension() != 2)
+			throw std::invalid_argument("Delaunay triangulation is degenerate");
 	}
 
 	QueryBuilder(const QueryBuilder& other) = delete;
@@ -333,60 +416,14 @@ public:
 	QueryBuilder& operator=(const QueryBuilder& other) = delete;
 
 	template <typename PointGenerator>
-	void build(Queries& queries, PointGenerator generator, size_t points) {
-		std::vector<Neighbour> vertices;
-		VertexSet reached;
+	void build(Queries& queries, PointGenerator generator, size_t pointsCount) const {
+		std::vector<Point3> points;
+		points.reserve(pointsCount);
 
-		vertices.reserve(this->delaunay.number_of_vertices());
-		reached.reserve(this->delaunay.number_of_vertices());
+		for (size_t count = 0; count < pointsCount; count++)
+			points.push_back(generator());
 
-		for (size_t count = 0; count < points; count++) {
-			Point3 origin = generator();
-
-			vertices.clear();
-			reached.clear();
-
-			SphericalDelaunay::Locate_type lt;
-			int li;
-			FaceHandle loc = this->delaunay.locate(origin, lt, li, FaceHandle());
-
-			if (lt != SphericalDelaunay::Locate_type::VERTEX && lt != SphericalDelaunay::Locate_type::TOO_CLOSE) {
-				VertexHandle inserted = this->delaunay.insert(origin, lt, loc, li);
-
-				auto incidents = this->delaunay.incident_vertices(inserted);
-				auto nextVertex = incidents;
-
-				if (incidents == nullptr) {
-					this->delaunay.remove(inserted);
-					throw std::invalid_argument("Delaunay triangulation is degenerate");
-				}
-
-				reached.insert(inserted);
-
-				do {
-					reached.insert(nextVertex);
-					vertices.emplace_back(origin, this->delaunay, nextVertex);
-
-					nextVertex++;
-				} while (nextVertex != incidents);
-
-				std::make_heap(vertices.begin(), vertices.end(), std::greater{});
-
-				this->dijkstraSearch(origin, vertices, reached, queries);
-
-				this->delaunay.remove(inserted);
-			} else {
-				VertexHandle found = loc->vertex(li);
-
-				if (this->delaunay.incident_vertices(found) == nullptr)
-					throw std::invalid_argument("Delaunay triangulation is degenerate");
-
-				reached.insert(found);
-				vertices.emplace_back(origin, this->delaunay, found);
-
-				this->dijkstraSearch(origin, vertices, reached, queries);
-			}
-		}
+		this->build(queries, points);
 	}
 };
 
