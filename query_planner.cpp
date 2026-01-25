@@ -12,8 +12,8 @@
 #include <simdjson.h>
 
 #include <CGAL/Unique_hash_map.h>
-#include <CGAL/Exact_predicates_inexact_constructions_kernel.h>
 #include <CGAL/spatial_sort_on_sphere.h>
+#include <CGAL/Exact_predicates_inexact_constructions_kernel.h>
 #include <CGAL/Delaunay_triangulation_on_sphere_traits_2.h>
 #include <CGAL/Delaunay_triangulation_on_sphere_2.h>
 
@@ -229,7 +229,7 @@ public:
 	}
 
 	Query end() const {
-		return ++Query(this->items.begin() + this->lastQueryIndex);
+		return Query(this->items.end());
 	}
 };
 
