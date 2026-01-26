@@ -2,6 +2,7 @@
 #include <cmath>
 #include <numbers>
 #include <vector>
+#include <utility>
 #include <algorithm>
 #include <random>
 #include <charconv>
@@ -22,6 +23,9 @@ using LinearKernel = CGAL::Exact_predicates_inexact_constructions_kernel;
 using Point3 = LinearKernel::Point_3;
 
 using ServerID = int32_t;
+using Server = std::pair<Point3, ServerID>;
+
+constexpr size_t RANDOM_POINTS_COUNT = 1 << 20;
 
 constexpr size_t USUAL_SERVERS_COUNT = 1 << 14;
 
@@ -396,15 +400,10 @@ private:
 		}
 	}
 public:
-	QueryBuilder(std::vector<Point3>& locations, const std::vector<ServerID>& servers) {
-		CGAL::spatial_sort_on_sphere(locations.begin(), locations.end());
-
-		FaceHandle loc;
-
-		for (size_t index = 0; index < locations.size(); index++) {
-			VertexHandle vertex = this->delaunay.insert(locations[index], loc);
-			this->buckets[vertex].push_back(servers[index]);
-			loc = vertex->face();
+	QueryBuilder(std::vector<Server>& servers) {
+		for (const auto& [location, serverID] : servers) {
+			VertexHandle vertex = this->delaunay.insert(location);
+			this->buckets[vertex].push_back(serverID);
 		}
 
 		if (this->delaunay.dimension() != 2)
@@ -427,7 +426,7 @@ public:
 	}
 };
 
-void parseServers(std::vector<Point3>& locations, std::vector<ServerID>& servers, const std::string& inputFile) {
+void parseServers(std::vector<Server>& servers, const std::string& inputFile) {
 	simdjson::ondemand::parser jsonParser;
 	simdjson::padded_string jsonString = simdjson::padded_string::load(inputFile);
 
@@ -435,8 +434,7 @@ void parseServers(std::vector<Point3>& locations, std::vector<ServerID>& servers
 		ServerID serverID = server["server_id"].get_int64();
 		std::string_view lat = server["latitude"];
 		std::string_view lon = server["longtitude"];
-		locations.push_back(GeographicPoint(lat, lon).toPoint());
-		servers.push_back(serverID);
+		servers.push_back(Server(GeographicPoint(lat, lon).toPoint(), serverID));
 	}
 }
 
@@ -496,17 +494,14 @@ int main(int argc, const char** argv) {
 		return 1;
 	}
 
-	std::vector<Point3> locations;
-	locations.reserve(USUAL_SERVERS_COUNT);
-
-	std::vector<ServerID> servers;
+	std::vector<Server> servers;
 	servers.reserve(USUAL_SERVERS_COUNT);
 
-	parseServers(locations, servers, argv[1]);
+	parseServers(servers, argv[1]);
 
-	QueryBuilder builder(locations, servers);
-	Queries queries(1000000);
-	builder.build(queries, RandomPointGenerator(), 1000000);
+	QueryBuilder builder(servers);
+	Queries queries(RANDOM_POINTS_COUNT);
+	builder.build(queries, RandomPointGenerator(), RANDOM_POINTS_COUNT);
 
 	std::vector<GeographicPoint> pruned;
 	size_t covered = pruneQueries(pruned, queries);
