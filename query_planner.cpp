@@ -4,10 +4,10 @@
 #include <vector>
 #include <utility>
 #include <algorithm>
-#include <random>
 #include <charconv>
 #include <fstream>
 
+#include <absl/random/random.h>
 #include <absl/container/flat_hash_set.h>
 
 #include <simdjson.h>
@@ -96,20 +96,12 @@ public:
 
 class RandomPointGenerator {
 private:
-	using RandomGenerator = std::mt19937;
-
-	RandomGenerator rng;
-	std::normal_distribution<> dist;
+	absl::InsecureBitGen rng;
 public:
-	RandomPointGenerator() {
-		std::random_device seedRng;
-		this->rng = RandomGenerator(seedRng());
-	}
-
 	Point3 operator()() {
-		double x = this->dist(this->rng);
-		double y = this->dist(this->rng);
-		double z = this->dist(this->rng);
+		double x = absl::Gaussian<double>(this->rng);
+		double y = absl::Gaussian<double>(this->rng);
+		double z = absl::Gaussian<double>(this->rng);
 
 		double length = std::sqrt(x * x + y * y + z * z);
 
@@ -383,16 +375,14 @@ private:
 				}
 
 				std::make_heap(vertices.begin(), vertices.end(), std::greater{});
-
-				this->dijkstraSearch(origin, vertices, reached, queries);
 			} else {
 				VertexHandle found = loc->vertex(li);
 
 				reached.insert(found);
 				vertices.emplace_back(origin, this->delaunay, found);
-
-				this->dijkstraSearch(origin, vertices, reached, queries);
 			}
+
+			this->dijkstraSearch(origin, vertices, reached, queries);
 
 			vertices.clear();
 			faces.clear();
@@ -400,7 +390,7 @@ private:
 		}
 	}
 public:
-	QueryBuilder(std::vector<Server>& servers) {
+	QueryBuilder(const std::vector<Server>& servers) {
 		for (const auto& [location, serverID] : servers) {
 			VertexHandle vertex = this->delaunay.insert(location);
 			this->buckets[vertex].push_back(serverID);
