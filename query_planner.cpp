@@ -341,7 +341,7 @@ private:
 		}
 	}
 
-	void build(Queries& queries, std::vector<Point3>& searchPoints) const {
+	void build(Queries& queries, const std::vector<Point3>& searchPoints) const {
 		std::vector<Neighbour> vertices;
 		vertices.reserve(this->delaunay.number_of_vertices());
 
@@ -350,8 +350,6 @@ private:
 
 		VertexSet reached;
 		reached.reserve(this->delaunay.number_of_vertices());
-
-		CGAL::spatial_sort_on_sphere(searchPoints.begin(), searchPoints.end());
 
 		FaceHandle loc;
 
@@ -411,6 +409,8 @@ public:
 
 		for (size_t count = 0; count < pointsCount; count++)
 			points.push_back(generator());
+
+		CGAL::spatial_sort_on_sphere(points.begin(), points.end());
 
 		this->build(queries, points);
 	}
