@@ -434,7 +434,8 @@ public:
 		using pointer = void;
 		using iterator_category = std::input_iterator_tag;
 
-		ServerListIterator() = default;
+		ServerListIterator(const ServerListIterator& other) :
+			jsonIterator(other.jsonIterator) {}
 
 		ServerListIterator(const JsonIterator& jsonIterator) :
 			jsonIterator(jsonIterator) {}
@@ -453,12 +454,6 @@ public:
 		ServerListIterator& operator++() {
 			++this->jsonIterator;
 			return *this;
-		}
-
-		ServerListIterator operator++(int) {
-			ServerListIterator it = *this;
-			++*this;
-			return it;
 		}
 
 		bool operator==(const ServerListIterator& other) const {
