@@ -23,11 +23,8 @@ using LinearKernel = CGAL::Exact_predicates_inexact_constructions_kernel;
 using Point3 = LinearKernel::Point_3;
 
 using ServerID = int32_t;
-using Server = std::pair<Point3, ServerID>;
 
 constexpr size_t RANDOM_POINTS_COUNT = 1 << 20;
-
-constexpr size_t USUAL_SERVERS_COUNT = 1 << 14;
 
 constexpr size_t SHORT_RANGE_SERVERS = 100;
 constexpr size_t LONG_RANGE_SERVERS = 20;
@@ -140,8 +137,8 @@ public:
 	public:
 		using difference_type = std::ptrdiff_t;
 		using value_type = ServerID;
-		using pointer = const ServerID*;
-		using reference = const ServerID&;
+		using reference = const value_type&;
+		using pointer = const value_type*;
 		using iterator_category = std::forward_iterator_tag;
 
 		ServerIterator() = default;
@@ -258,10 +255,10 @@ private:
 	inline static const Angle LONG_RANGE_ANGLE = Angle(2000.0 / EARTH_RADIUS_MILES);
 
 	struct NoOpEdgeIterator {
-		using difference_type = std::ptrdiff_t;
+		using difference_type = void;
 		using value_type = void;
-		using pointer = void;
 		using reference = void;
+		using pointer = void;
 		using iterator_category = std::output_iterator_tag;
 
 		SphericalDelaunay::Edge operator*() {
@@ -388,10 +385,12 @@ private:
 		}
 	}
 public:
-	QueryBuilder(const std::vector<Server>& servers) {
-		for (const auto& [location, serverID] : servers) {
-			VertexHandle vertex = this->delaunay.insert(location);
-			this->buckets[vertex].push_back(serverID);
+	template <typename ServerIt>
+	QueryBuilder(ServerIt begin, ServerIt end) {
+		for (ServerIt it = begin; it != end; ++it) {
+			const std::pair<Point3, ServerID>& server = *it;
+			VertexHandle vertex = this->delaunay.insert(server.first);
+			this->buckets[vertex].push_back(server.second);
 		}
 
 		if (this->delaunay.dimension() != 2)
@@ -416,17 +415,70 @@ public:
 	}
 };
 
-void parseServers(std::vector<Server>& servers, const std::string& inputFile) {
-	simdjson::ondemand::parser jsonParser;
-	simdjson::padded_string jsonString = simdjson::padded_string::load(inputFile);
+class ServerList {
+private:
+	using JsonIterator = simdjson::simdjson_result<simdjson::ondemand::array_iterator>;
 
-	for (auto server : jsonParser.iterate(jsonString)) {
-		ServerID serverID = server["server_id"].get_int64();
-		std::string_view lat = server["latitude"];
-		std::string_view lon = server["longtitude"];
-		servers.push_back(Server(GeographicPoint(lat, lon).toPoint(), serverID));
+	simdjson::padded_string jsonData;
+
+	simdjson::ondemand::parser jsonParser;
+	simdjson::ondemand::document jsonDocument;
+public:
+	class ServerListIterator {
+	private:
+		JsonIterator jsonIterator;
+	public:
+		using difference_type = std::ptrdiff_t;
+		using value_type = std::pair<Point3, ServerID>;
+		using reference = value_type;
+		using pointer = void;
+		using iterator_category = std::input_iterator_tag;
+
+		ServerListIterator() = default;
+
+		ServerListIterator(const JsonIterator& jsonIterator) :
+			jsonIterator(jsonIterator) {}
+
+		std::pair<Point3, ServerID> operator*() {
+			auto serverObj = *this->jsonIterator;
+
+			ServerID serverID = serverObj["server_id"].get_int64();
+
+			std::string_view lat = serverObj["latitude"];
+			std::string_view lon = serverObj["longtitude"];
+
+			return std::make_pair(GeographicPoint(lat, lon).toPoint(), serverID);
+		}
+
+		ServerListIterator& operator++() {
+			++this->jsonIterator;
+			return *this;
+		}
+
+		ServerListIterator operator++(int) {
+			ServerListIterator it = *this;
+			++*this;
+			return it;
+		}
+
+		bool operator==(const ServerListIterator& other) const {
+			return this->jsonIterator == other.jsonIterator;
+		}
+	};
+
+	ServerList(const std::string& inputFile) {
+		this->jsonData = simdjson::padded_string::load(inputFile);
+		this->jsonDocument = this->jsonParser.iterate(this->jsonData);
 	}
-}
+
+	ServerListIterator begin() {
+		return ServerListIterator(this->jsonDocument.begin());
+	}
+
+	ServerListIterator end() {
+		return ServerListIterator(this->jsonDocument.end());
+	}
+};
 
 size_t pruneQueries(std::vector<GeographicPoint>& result, const Queries& queries) {
 	absl::flat_hash_set<ServerID> covered;
@@ -484,12 +536,9 @@ int main(int argc, const char** argv) {
 		return 1;
 	}
 
-	std::vector<Server> servers;
-	servers.reserve(USUAL_SERVERS_COUNT);
+	ServerList serverList(argv[1]);
 
-	parseServers(servers, argv[1]);
-
-	QueryBuilder builder(servers);
+	QueryBuilder builder(serverList.begin(), serverList.end());
 	Queries queries(RANDOM_POINTS_COUNT);
 	builder.build(queries, RandomPointGenerator(), RANDOM_POINTS_COUNT);
 
