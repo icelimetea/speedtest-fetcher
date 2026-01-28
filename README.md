@@ -29,7 +29,7 @@ Query planner is written in C++ and depends on:
 * CGAL
 * simdjson
 
-It can be build using CMake:
+It can be built using CMake:
 
 ```sh
 $ git clone 'https://github.com/icelimetea/speedtest-fetcher.git'
