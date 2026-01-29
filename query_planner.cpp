@@ -178,9 +178,7 @@ public:
 		using value_type = Query;
 		using reference = const value_type&;
 		using pointer = const value_type*;
-		using iterator_category = std::forward_iterator_tag;
-
-		Query() = default;
+		using iterator_category = std::input_iterator_tag;
 
 		Query(const Query& other) = default;
 
