@@ -26,10 +26,6 @@ using ServerID = int32_t;
 
 constexpr size_t RANDOM_POINTS_COUNT = 1 << 20;
 
-constexpr size_t SHORT_RANGE_SERVERS = 100;
-constexpr size_t LONG_RANGE_SERVERS = 20;
-constexpr size_t MAX_SERVERS_PER_RANGE = std::max(SHORT_RANGE_SERVERS, LONG_RANGE_SERVERS);
-
 class Angle {
 private:
 	double cos;
@@ -130,6 +126,10 @@ private:
 
 	size_t lastQueryIndex = 0;
 public:
+	static constexpr size_t SHORT_RANGE_SERVERS = 100;
+	static constexpr size_t LONG_RANGE_SERVERS = 20;
+	static constexpr size_t MAX_SERVERS_PER_RANGE = std::max(SHORT_RANGE_SERVERS, LONG_RANGE_SERVERS);
+
 	class ServerIterator {
 	private:
 		Iterator itemIt;
@@ -143,13 +143,11 @@ public:
 
 		ServerIterator() = default;
 
-		ServerIterator(const ServerIterator& other):
-			itemIt(other.itemIt),
-			index(other.index) {}
+		ServerIterator(const ServerIterator& other) = default;
 
-		ServerIterator(Iterator itemIterator, size_t index) :
-			itemIt(itemIterator + index / Item::NUM_SERVERS),
-			index(index % Item::NUM_SERVERS) {}
+		ServerIterator(Iterator itemIterator, size_t serverIndex) :
+			itemIt(itemIterator + serverIndex / Item::NUM_SERVERS),
+			index(serverIndex % Item::NUM_SERVERS) {}
 
 		const ServerID& operator*() const {
 			return this->itemIt->servers[this->index];
@@ -176,11 +174,35 @@ public:
 	private:
 		Iterator itemIt;
 	public:
+		using difference_type = std::ptrdiff_t;
+		using value_type = Query;
+		using reference = const value_type&;
+		using pointer = const value_type*;
+		using iterator_category = std::forward_iterator_tag;
+
+		Query() = default;
+
+		Query(const Query& other) = default;
+
 		Query(Iterator itemIterator) : itemIt(itemIterator) {}
+
+		const Query& operator*() const {
+			return *this;
+		}
+
+		const Query* operator->() const {
+			return this;
+		}
 
 		Query& operator++() {
 			this->itemIt += (this->itemIt->tag.size + Item::NUM_SERVERS - 1) / Item::NUM_SERVERS + 1;
 			return *this;
+		}
+
+		Query operator++(int) {
+			Query it = *this;
+			++*this;
+			return it;
 		}
 
 		bool operator==(const Query& other) const {
@@ -305,9 +327,9 @@ private:
 			size_t limit;
 
 			if (neighbour.distance < SHORT_RANGE_ANGLE) {
-				limit = SHORT_RANGE_SERVERS;
+				limit = Queries::SHORT_RANGE_SERVERS;
 			} else if (neighbour.distance < LONG_RANGE_ANGLE) {
-				limit = LONG_RANGE_SERVERS;
+				limit = Queries::LONG_RANGE_SERVERS;
 			} else {
 				return;
 			}
@@ -434,11 +456,9 @@ public:
 		using pointer = void;
 		using iterator_category = std::input_iterator_tag;
 
-		ServerListIterator(const ServerListIterator& other) :
-			jsonIterator(other.jsonIterator) {}
+		ServerListIterator(const ServerListIterator& other) = default;
 
-		ServerListIterator(const JsonIterator& jsonIterator) :
-			jsonIterator(jsonIterator) {}
+		ServerListIterator(const JsonIterator& jsonIterator) : jsonIterator(jsonIterator) {}
 
 		std::pair<Point3, ServerID> operator*() {
 			auto serverObj = *this->jsonIterator;
@@ -479,7 +499,7 @@ size_t pruneQueries(std::vector<GeographicPoint>& result, const Queries& queries
 	absl::flat_hash_set<ServerID> covered;
 	std::vector<std::vector<Queries::Query>> buckets;
 
-	for (Queries::Query query = queries.begin(); query != queries.end(); ++query) {
+	for (Queries::Query query : queries) {
 		size_t querySize = query.size();
 
 		if (querySize >= buckets.size())
