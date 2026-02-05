@@ -120,7 +120,7 @@ private:
 		Item(const Point3& location) : tag(location, 0) {}
 	};
 
-	using Iterator = std::vector<Item>::const_iterator;
+	using ItemIterator = std::vector<Item>::const_iterator;
 
 	std::vector<Item> items;
 
@@ -132,7 +132,7 @@ public:
 
 	class ServerIterator {
 	private:
-		Iterator itemIt;
+		ItemIterator itemIt;
 		size_t index;
 	public:
 		using difference_type = std::ptrdiff_t;
@@ -145,12 +145,16 @@ public:
 
 		ServerIterator(const ServerIterator& other) = default;
 
-		ServerIterator(Iterator itemIterator, size_t serverIndex) :
+		ServerIterator(ItemIterator itemIterator, size_t serverIndex) :
 			itemIt(itemIterator + serverIndex / Item::NUM_SERVERS),
 			index(serverIndex % Item::NUM_SERVERS) {}
 
 		const ServerID& operator*() const {
 			return this->itemIt->servers[this->index];
+		}
+
+		const ServerID* operator->() const {
+			return &this->itemIt->servers[this->index];
 		}
 
 		ServerIterator& operator++() {
@@ -172,40 +176,9 @@ public:
 
 	class Query {
 	private:
-		Iterator itemIt;
+		ItemIterator itemIt;
 	public:
-		using difference_type = std::ptrdiff_t;
-		using value_type = Query;
-		using reference = const value_type&;
-		using pointer = const value_type*;
-		using iterator_category = std::input_iterator_tag;
-
-		Query(const Query& other) = default;
-
-		Query(Iterator itemIterator) : itemIt(itemIterator) {}
-
-		const Query& operator*() const {
-			return *this;
-		}
-
-		const Query* operator->() const {
-			return this;
-		}
-
-		Query& operator++() {
-			this->itemIt += (this->itemIt->tag.size + Item::NUM_SERVERS - 1) / Item::NUM_SERVERS + 1;
-			return *this;
-		}
-
-		Query operator++(int) {
-			Query it = *this;
-			++*this;
-			return it;
-		}
-
-		bool operator==(const Query& other) const {
-			return this->itemIt == other.itemIt;
-		}
+		Query(ItemIterator itemIterator) : itemIt(itemIterator) {}
 
 		const Point3& getLocation() const {
 			return this->itemIt->tag.location;
@@ -221,6 +194,40 @@ public:
 
 		ServerIterator end() const {
 			return ServerIterator(this->itemIt + 1, this->itemIt->tag.size);
+		}
+	};
+
+	class QueryIterator {
+	private:
+		ItemIterator itemIt;
+	public:
+		using difference_type = std::ptrdiff_t;
+		using value_type = Query;
+		using reference = value_type;
+		using pointer = void;
+		using iterator_category = std::input_iterator_tag;
+
+		QueryIterator(const QueryIterator& other) = default;
+
+		QueryIterator(ItemIterator itemIterator) : itemIt(itemIterator) {}
+
+		Query operator*() const {
+			return Query(this->itemIt);
+		}
+
+		QueryIterator& operator++() {
+			this->itemIt += (this->itemIt->tag.size + Item::NUM_SERVERS - 1) / Item::NUM_SERVERS + 1;
+			return *this;
+		}
+
+		QueryIterator operator++(int) {
+			QueryIterator it = *this;
+			++*this;
+			return it;
+		}
+
+		bool operator==(const QueryIterator& other) const {
+			return this->itemIt == other.itemIt;
 		}
 	};
 
@@ -246,12 +253,12 @@ public:
 		this->items.back().servers[serverIndex] = serverID;
 	}
 
-	Query begin() const {
-		return Query(this->items.begin());
+	QueryIterator begin() const {
+		return QueryIterator(this->items.begin());
 	}
 
-	Query end() const {
-		return Query(this->items.end());
+	QueryIterator end() const {
+		return QueryIterator(this->items.end());
 	}
 };
 
@@ -408,9 +415,9 @@ public:
 	template <typename ServerIt>
 	QueryBuilder(ServerIt begin, ServerIt end) {
 		for (ServerIt it = begin; it != end; ++it) {
-			const std::pair<Point3, ServerID>& server = *it;
-			VertexHandle vertex = this->delaunay.insert(server.first);
-			this->buckets[vertex].push_back(server.second);
+			const std::pair<ServerID, Point3>& server = *it;
+			VertexHandle vertex = this->delaunay.insert(server.second);
+			this->buckets[vertex].push_back(server.first);
 		}
 
 		if (this->delaunay.dimension() != 2)
@@ -449,7 +456,7 @@ public:
 		JsonIterator jsonIterator;
 	public:
 		using difference_type = std::ptrdiff_t;
-		using value_type = std::pair<Point3, ServerID>;
+		using value_type = std::pair<ServerID, Point3>;
 		using reference = value_type;
 		using pointer = void;
 		using iterator_category = std::input_iterator_tag;
@@ -458,7 +465,7 @@ public:
 
 		ServerListIterator(const JsonIterator& jsonIterator) : jsonIterator(jsonIterator) {}
 
-		std::pair<Point3, ServerID> operator*() {
+		std::pair<ServerID, Point3> operator*() {
 			auto serverObj = *this->jsonIterator;
 
 			ServerID serverID = serverObj["server_id"].get_int64();
@@ -466,7 +473,7 @@ public:
 			std::string_view lat = serverObj["latitude"];
 			std::string_view lon = serverObj["longtitude"];
 
-			return std::make_pair(GeographicPoint(lat, lon).toPoint(), serverID);
+			return std::make_pair(serverID, GeographicPoint(lat, lon).toPoint());
 		}
 
 		ServerListIterator& operator++() {
