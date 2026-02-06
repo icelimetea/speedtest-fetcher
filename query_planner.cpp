@@ -552,7 +552,7 @@ namespace simdjson {
 	}
 }
 
-void dumpQueries(const std::string& outputFile, const Queries& queries) {
+void dumpSetCover(const std::string& outputFile, const Queries& queries) {
 	std::ofstream outputStream(outputFile);
 
 	absl::flat_hash_map<ServerID, std::vector<size_t>> constraints;
@@ -599,7 +599,7 @@ void dumpPoints(const std::string& outputFile, const std::vector<GeographicPoint
 
 ABSL_FLAG(std::optional<std::string>, servers, std::nullopt, "Input file containing server list in JSON format");
 ABSL_FLAG(std::optional<std::string>, plan, std::nullopt, "Output file for storing planned queries in JSON format");
-ABSL_FLAG(std::optional<std::string>, queries, std::nullopt, "If specified, output file for storing unpruned queries as BIP");
+ABSL_FLAG(std::optional<std::string>, setcover, std::nullopt, "If specified, output file for storing the set cover problem instance as a BIP (using CPLEX LP format)");
 ABSL_FLAG(size_t, points, 1 << 20, "Number of points to sample");
 
 int main(int argc, char** argv) {
@@ -619,7 +619,7 @@ int main(int argc, char** argv) {
 
 	std::string serversFile = absl::GetFlag(FLAGS_servers).value();
 	std::string planFile = absl::GetFlag(FLAGS_plan).value();
-	std::optional<std::string> queriesFile = absl::GetFlag(FLAGS_queries);
+	std::optional<std::string> setCoverFile = absl::GetFlag(FLAGS_setcover);
 	size_t pointsCount = absl::GetFlag(FLAGS_points);
 
 	ServerList serverList(serversFile);
@@ -628,8 +628,8 @@ int main(int argc, char** argv) {
 	Queries queries(pointsCount);
 	builder.build(queries, RandomPointGenerator(), pointsCount);
 
-	if (queriesFile)
-		dumpQueries(queriesFile.value(), queries);
+	if (setCoverFile.has_value())
+		dumpSetCover(setCoverFile.value(), queries);
 
 	std::vector<GeographicPoint> pruned;
 	size_t covered = pruneQueries(pruned, queries);
