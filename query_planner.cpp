@@ -28,8 +28,6 @@ using Point3 = LinearKernel::Point_3;
 
 using ServerID = int32_t;
 
-constexpr size_t RANDOM_POINTS_COUNT = 1 << 20;
-
 class Angle {
 private:
 	double cos;
@@ -602,6 +600,7 @@ void dumpPoints(const std::string& outputFile, const std::vector<GeographicPoint
 ABSL_FLAG(std::optional<std::string>, servers, std::nullopt, "Input file containing server list in JSON format");
 ABSL_FLAG(std::optional<std::string>, plan, std::nullopt, "Output file for storing planned queries in JSON format");
 ABSL_FLAG(std::optional<std::string>, queries, std::nullopt, "If specified, output file for storing unpruned queries as BIP");
+ABSL_FLAG(size_t, points, 1 << 20, "Number of points to sample");
 
 int main(int argc, char** argv) {
 	absl::SetProgramUsageMessage("Query planner for server fetcher");
@@ -621,12 +620,13 @@ int main(int argc, char** argv) {
 	std::string serversFile = absl::GetFlag(FLAGS_servers).value();
 	std::string planFile = absl::GetFlag(FLAGS_plan).value();
 	std::optional<std::string> queriesFile = absl::GetFlag(FLAGS_queries);
+	size_t pointsCount = absl::GetFlag(FLAGS_points);
 
 	ServerList serverList(serversFile);
 
 	QueryBuilder builder(serverList.begin(), serverList.end());
-	Queries queries(RANDOM_POINTS_COUNT);
-	builder.build(queries, RandomPointGenerator(), RANDOM_POINTS_COUNT);
+	Queries queries(pointsCount);
+	builder.build(queries, RandomPointGenerator(), pointsCount);
 
 	if (queriesFile)
 		dumpQueries(queriesFile.value(), queries);
