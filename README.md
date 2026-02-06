@@ -20,7 +20,7 @@ You can use query planner together with fetcher like so:
 
 ```sh
 $ ./fetch_servers --output servers.json                           # Fetch a preliminary server list (for query planner)
-$ ./query_planner servers.json plan.json                          # Generate a query plan and save it to plan.json
+$ ./query_planner --servers servers.json --plan plan.json         # Generate a query plan and save it to plan.json
 $ ./fetch_servers --plan plan.json --output servers_extra.json    # Fetch servers using a plan
 ```
 

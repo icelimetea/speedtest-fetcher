@@ -7,8 +7,12 @@
 #include <charconv>
 #include <fstream>
 
+#include <absl/flags/flag.h>
+#include <absl/flags/parse.h>
+#include <absl/flags/usage.h>
 #include <absl/random/random.h>
 #include <absl/container/flat_hash_set.h>
+#include <absl/container/flat_hash_map.h>
 
 #include <simdjson.h>
 
@@ -550,25 +554,91 @@ namespace simdjson {
 	}
 }
 
-int main(int argc, const char** argv) {
-	if (argc != 3) {
-		std::cout << "Usage: " << argv[0] << " [input file] [output file]" << std::endl;
+void dumpQueries(const std::string& outputFile, const Queries& queries) {
+	std::ofstream outputStream(outputFile);
+
+	absl::flat_hash_map<ServerID, std::vector<size_t>> constraints;
+
+	size_t queryIndex = 0;
+
+	for (Queries::Query query : queries) {
+		for (ServerID serverID : query)
+			constraints[serverID].push_back(queryIndex);
+
+		queryIndex++;
+	}
+
+	outputStream << "Minimize obj: 0";
+
+	for (size_t varIndex = 0; varIndex < queryIndex; varIndex++)
+		outputStream << " + x" << varIndex;
+
+	outputStream << std::endl;
+
+	outputStream << "Subject To" << std::endl;
+
+	for (const auto& [serverID, queries] : constraints) {
+		outputStream << "0";
+
+		for (size_t varIndex : queries)
+			outputStream << " + x" << varIndex;
+
+		outputStream << " > 0" << std::endl;
+	}
+
+	outputStream << "Binary";
+
+	for (size_t varIndex = 0; varIndex < queryIndex; varIndex++)
+		outputStream << " x" << varIndex;
+
+	outputStream << std::endl;
+
+	outputStream << "End" << std::endl;
+}
+
+void dumpPoints(const std::string& outputFile, const std::vector<GeographicPoint>& points) {
+	std::ofstream outputStream(outputFile);
+	outputStream << simdjson::to_json(points) << std::endl;
+}
+
+ABSL_FLAG(std::optional<std::string>, servers, std::nullopt, "Input file containing server list in JSON format");
+ABSL_FLAG(std::optional<std::string>, plan, std::nullopt, "Output file for storing planned queries in JSON format");
+ABSL_FLAG(std::optional<std::string>, queries, std::nullopt, "If specified, output file for storing unpruned queries as BIP");
+
+int main(int argc, char** argv) {
+	absl::SetProgramUsageMessage("Query planner for server fetcher");
+
+	absl::ParseCommandLine(argc, argv);
+
+	if (!absl::GetFlag(FLAGS_servers)) {
+		std::cout << "Input server list is not provided. See --help for details." << std::endl;
 		return 1;
 	}
 
-	ServerList serverList(argv[1]);
+	if (!absl::GetFlag(FLAGS_plan)) {
+		std::cout << "Output file name for planned queries is not provided. See --help for details." << std::endl;
+		return 1;
+	}
+
+	std::string serversFile = absl::GetFlag(FLAGS_servers).value();
+	std::string planFile = absl::GetFlag(FLAGS_plan).value();
+	std::optional<std::string> queriesFile = absl::GetFlag(FLAGS_queries);
+
+	ServerList serverList(serversFile);
 
 	QueryBuilder builder(serverList.begin(), serverList.end());
 	Queries queries(RANDOM_POINTS_COUNT);
 	builder.build(queries, RandomPointGenerator(), RANDOM_POINTS_COUNT);
+
+	if (queriesFile)
+		dumpQueries(queriesFile.value(), queries);
 
 	std::vector<GeographicPoint> pruned;
 	size_t covered = pruneQueries(pruned, queries);
 
 	std::cout << "Covered " << covered << " servers using " << pruned.size() << " search queries." << std::endl;
 
-	std::ofstream queryPlan(argv[2]);
-	queryPlan << simdjson::to_json(pruned) << std::endl;
+	dumpPoints(planFile, pruned);
 
 	return 0;
 }
