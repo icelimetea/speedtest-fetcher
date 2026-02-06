@@ -581,7 +581,7 @@ void dumpQueries(const std::string& outputFile, const Queries& queries) {
 		for (size_t varIndex : queries)
 			outputStream << " + x" << varIndex;
 
-		outputStream << " > 0" << std::endl;
+		outputStream << " >= 1" << std::endl;
 	}
 
 	outputStream << "Binary";
