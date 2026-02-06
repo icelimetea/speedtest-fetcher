@@ -568,7 +568,7 @@ void dumpQueries(const std::string& outputFile, const Queries& queries) {
 		queryIndex++;
 	}
 
-	outputStream << "Minimize obj: 0";
+	outputStream << "Minimize obj:";
 
 	for (size_t varIndex = 0; varIndex < queryIndex; varIndex++)
 		outputStream << " + x" << varIndex;
@@ -578,8 +578,6 @@ void dumpQueries(const std::string& outputFile, const Queries& queries) {
 	outputStream << "Subject To" << std::endl;
 
 	for (const auto& [serverID, queries] : constraints) {
-		outputStream << "0";
-
 		for (size_t varIndex : queries)
 			outputStream << " + x" << varIndex;
 
