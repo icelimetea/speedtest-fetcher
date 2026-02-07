@@ -12,7 +12,6 @@
 #include <absl/flags/usage.h>
 #include <absl/random/random.h>
 #include <absl/container/flat_hash_set.h>
-#include <absl/container/flat_hash_map.h>
 
 #include <simdjson.h>
 
@@ -555,41 +554,75 @@ namespace simdjson {
 void dumpSetCover(const std::string& outputFile, const Queries& queries) {
 	std::ofstream outputStream(outputFile);
 
-	absl::flat_hash_map<ServerID, std::vector<size_t>> constraints;
+	absl::flat_hash_set<ServerID> servers;
+
+	for (Queries::Query query : queries)
+		for (ServerID serverID : query)
+			servers.insert(serverID);
+
+	outputStream << "NAME SET_COVER" << std::endl;
+
+	outputStream << "OBJSENSE MIN" << std::endl;
+
+	outputStream << "ROWS" << std::endl;
+
+	outputStream
+		<< " "
+		<< "N" << " "
+		<< "SETS_COUNT" << std::endl;
+
+	for (ServerID serverID : servers) {
+		outputStream
+			<< " "
+			<< "G" << " "
+			<< "S" << serverID << std::endl;
+	}
+
+	outputStream << "COLUMNS" << std::endl;
 
 	size_t queryIndex = 0;
-
 	for (Queries::Query query : queries) {
-		for (ServerID serverID : query)
-			constraints[serverID].push_back(queryIndex);
+		outputStream
+			<< " "
+			<< " "
+			<< "Q" << queryIndex << " "
+			<< "SETS_COUNT" << " "
+			<< "1" << std::endl;
+
+		for (ServerID serverID : query) {
+			outputStream
+				<< " "
+				<< " "
+				<< "Q" << queryIndex << " "
+				<< "S" << serverID << " "
+				<< "1" << std::endl;
+		}
 
 		queryIndex++;
 	}
 
-	outputStream << "Minimize obj:";
+	outputStream << "RHS" << std::endl;
 
-	for (size_t varIndex = 0; varIndex < queryIndex; varIndex++)
-		outputStream << " + x" << varIndex;
-
-	outputStream << std::endl;
-
-	outputStream << "Subject To" << std::endl;
-
-	for (const auto& [serverID, queries] : constraints) {
-		for (size_t varIndex : queries)
-			outputStream << " + x" << varIndex;
-
-		outputStream << " >= 1" << std::endl;
+	for (ServerID serverID : servers) {
+		outputStream
+			<< " "
+			<< " "
+			<< "R" << " "
+			<< "S" << serverID << " "
+			<< "1" << std::endl;
 	}
 
-	outputStream << "Binary";
+	outputStream << "BOUNDS" << std::endl;
 
-	for (size_t varIndex = 0; varIndex < queryIndex; varIndex++)
-		outputStream << " x" << varIndex;
+	for (size_t columnIndex = 0; columnIndex < queryIndex; columnIndex++) {
+		outputStream
+			<< " "
+			<< "BV" << " "
+			<< "B" << " "
+			<< "Q" << columnIndex << std::endl;
+	}
 
-	outputStream << std::endl;
-
-	outputStream << "End" << std::endl;
+	outputStream << "ENDATA" << std::endl;
 }
 
 void dumpPoints(const std::string& outputFile, const std::vector<GeographicPoint>& points) {
@@ -599,7 +632,7 @@ void dumpPoints(const std::string& outputFile, const std::vector<GeographicPoint
 
 ABSL_FLAG(std::optional<std::string>, servers, std::nullopt, "Input file containing server list in JSON format");
 ABSL_FLAG(std::optional<std::string>, plan, std::nullopt, "Output file for storing planned queries in JSON format");
-ABSL_FLAG(std::optional<std::string>, setcover, std::nullopt, "If specified, output file for storing the set cover problem instance as a BIP (using CPLEX LP format)");
+ABSL_FLAG(std::optional<std::string>, setcover, std::nullopt, "If specified, output file for storing the set cover problem instance as a BIP (using CPLEX MPS format)");
 ABSL_FLAG(size_t, points, 1 << 20, "Number of points to sample");
 
 int main(int argc, char** argv) {

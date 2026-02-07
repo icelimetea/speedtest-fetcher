@@ -14,6 +14,5 @@ target_link_libraries(query_planner absl::flags
                                     absl::random_random
                                     absl::random_distributions
                                     absl::flat_hash_set
-                                    absl::flat_hash_map
                                     CGAL
                                     simdjson)
