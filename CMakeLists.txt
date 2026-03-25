@@ -14,7 +14,7 @@ set_property(TARGET query_planner PROPERTY EXPORT_COMPILE_COMMANDS ON)
 if (MSVC)
     target_compile_options(query_planner PRIVATE /W4 /WX /wd4702)
 else()
-    target_compile_options(query_planner PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    target_compile_options(query_planner PRIVATE -Wall -Wextra -Wpedantic -Werror -Wno-c2y-extensions)
 endif()
 
 target_link_libraries(query_planner absl::flags
