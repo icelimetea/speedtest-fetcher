@@ -56,12 +56,12 @@ private:
 	double lat;
 	double lon;
 public:
-	GeographicPoint(std::string_view latitude, std::string_view longtitude) {
+	GeographicPoint(std::string_view latitude, std::string_view longitude) {
 		if (std::from_chars(latitude.data(), latitude.data() + latitude.size(), this->lat).ec != std::errc())
 			throw std::invalid_argument("Invalid latitude");
 
-		if (std::from_chars(longtitude.data(), longtitude.data() + longtitude.size(), this->lon).ec != std::errc())
-			throw std::invalid_argument("Invalid longtitude");
+		if (std::from_chars(longitude.data(), longitude.data() + longitude.size(), this->lon).ec != std::errc())
+			throw std::invalid_argument("Invalid longitude");
 	}
 
 	GeographicPoint(const Point3& point) {
@@ -73,7 +73,7 @@ public:
 		return this->lat;
 	}
 
-	LinearKernel::FT getLongtitude() const {
+	LinearKernel::FT getLongitude() const {
 		return this->lon;
 	}
 
@@ -417,8 +417,8 @@ public:
 	template <typename ServerIt>
 	QueryBuilder(ServerIt begin, ServerIt end) {
 		for (ServerIt it = begin; it != end; ++it) {
-			const std::pair<ServerID, Point3>& server = *it;
-			VertexHandle vertex = this->delaunay.insert(server.second);
+			const std::pair<ServerID, GeographicPoint>& server = *it;
+			VertexHandle vertex = this->delaunay.insert(server.second.toPoint());
 			this->buckets[vertex].push_back(server.first);
 		}
 
@@ -458,7 +458,7 @@ public:
 		JsonIterator iter;
 	public:
 		using difference_type = std::ptrdiff_t;
-		using value_type = std::pair<ServerID, Point3>;
+		using value_type = std::pair<ServerID, GeographicPoint>;
 		using reference = value_type;
 		using pointer = void;
 		using iterator_category = std::input_iterator_tag;
@@ -467,7 +467,7 @@ public:
 
 		ServerListIterator(const JsonIterator& jsonIterator) : iter(jsonIterator) {}
 
-		std::pair<ServerID, Point3> operator*() {
+		std::pair<ServerID, GeographicPoint> operator*() {
 			auto serverObj = *this->iter;
 
 			int64_t uncheckedServerID = serverObj["server_id"].get_int64();
@@ -478,9 +478,9 @@ public:
 			ServerID serverID = static_cast<ServerID>(uncheckedServerID);
 
 			std::string_view lat = serverObj["latitude"];
-			std::string_view lon = serverObj["longtitude"];
+			std::string_view lon = serverObj["longitude"];
 
-			return std::make_pair(serverID, GeographicPoint(lat, lon).toPoint());
+			return std::make_pair(serverID, GeographicPoint(lat, lon));
 		}
 
 		ServerListIterator& operator++() {
@@ -506,6 +506,17 @@ public:
 		return ServerListIterator(this->jsonDocument.end());
 	}
 };
+
+namespace simdjson {
+	template <typename builder_type>
+	void tag_invoke(serialize_tag, builder_type& builder, const GeographicPoint& point) {
+		builder.start_object();
+		builder.append_key_value("latitude", point.getLatitude());
+		builder.append_comma();
+		builder.append_key_value("longitude", point.getLongitude());
+		builder.end_object();
+	}
+}
 
 static size_t pruneQueries(std::vector<GeographicPoint>& result, const Queries& queries) {
 	absl::flat_hash_set<ServerID> covered;
@@ -544,17 +555,6 @@ static size_t pruneQueries(std::vector<GeographicPoint>& result, const Queries& 
 	}
 
 	return covered.size();
-}
-
-namespace simdjson {
-	template <typename builder_type>
-	void tag_invoke(serialize_tag, builder_type& builder, const GeographicPoint& point) {
-		builder.start_object();
-		builder.append_key_value("latitude", point.getLatitude());
-		builder.append_comma();
-		builder.append_key_value("longtitude", point.getLongtitude());
-		builder.end_object();
-	}
 }
 
 static void dumpSetCover(const std::string& outputFile, const Queries& queries) {

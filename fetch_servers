@@ -18,7 +18,7 @@ class Server:
     def __init__(self, attrib):
         self.server_id = int(attrib["id"])
         self.latitude = attrib["lat"]
-        self.longtitude = attrib["lon"]
+        self.longitude = attrib["lon"]
         self.location_name = attrib["name"]
         self.sponsor = attrib["sponsor"]
         self.test_url = attrib["url"]
@@ -76,7 +76,7 @@ def old_api_query_generator():
 
 def new_api_query_generator(query_plan):
     for query_loc in query_plan:
-        yield SPEEDTEST_CONFIG_URL_JSON, { "engine": "js", "limit": 100, "lat": query_loc["latitude"], "lon": query_loc["longtitude"] }
+        yield SPEEDTEST_CONFIG_URL_JSON, { "engine": "js", "limit": 100, "lat": query_loc["latitude"], "lon": query_loc["longitude"] }
 
 
 def fetch_servers(query_gen, parser, user_agent):
