@@ -590,7 +590,6 @@ static void dumpSetCover(const std::string& outputFile, const Queries& queries) 
 	for (Queries::Query query : queries) {
 		outputStream
 			<< "*" << " "
-			<< " "
 			<< "QUERY_" << queryIndex << " "
 			<< query.getLocation() << "\n";
 
