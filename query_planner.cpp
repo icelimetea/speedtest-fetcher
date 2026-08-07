@@ -307,9 +307,9 @@ private:
 		VertexHandle vertex;
 		Angle distance;
 
-		Neighbour(const Point3& origin, const SphericalDelaunay& delaunayTriang, VertexHandle vertexHandle) :
+		Neighbour(const Point3& origin, const SphericalDelaunay& delaunay, VertexHandle vertexHandle) :
 			vertex(vertexHandle),
-			distance(origin, delaunayTriang.point(vertexHandle)) {}
+			distance(origin, delaunay.point(vertexHandle)) {}
 
 		friend bool operator<(const Neighbour& lhs, const Neighbour& rhs) {
 			return lhs.distance < rhs.distance;
@@ -566,25 +566,25 @@ static void dumpSetCover(const std::string& outputFile, const Queries& queries) 
 		for (ServerID serverID : query)
 			servers.insert(serverID);
 
-	outputStream << "NAME SET_COVER" << std::endl;
+	outputStream << "NAME SET_COVER" << "\n";
 
-	outputStream << "OBJSENSE MIN" << std::endl;
+	outputStream << "OBJSENSE MIN" << "\n";
 
-	outputStream << "ROWS" << std::endl;
+	outputStream << "ROWS" << "\n";
 
 	outputStream
 		<< " "
 		<< "N" << " "
-		<< "SETS_COUNT" << std::endl;
+		<< "SETS_COUNT" << "\n";
 
 	for (ServerID serverID : servers) {
 		outputStream
 			<< " "
 			<< "G" << " "
-			<< "S" << serverID << std::endl;
+			<< "S" << serverID << "\n";
 	}
 
-	outputStream << "COLUMNS" << std::endl;
+	outputStream << "COLUMNS" << "\n";
 
 	size_t queryIndex = 0;
 	for (Queries::Query query : queries) {
@@ -593,7 +593,7 @@ static void dumpSetCover(const std::string& outputFile, const Queries& queries) 
 			<< " "
 			<< "Q" << queryIndex << " "
 			<< "SETS_COUNT" << " "
-			<< "1" << std::endl;
+			<< "1" << "\n";
 
 		for (ServerID serverID : query) {
 			outputStream
@@ -601,13 +601,13 @@ static void dumpSetCover(const std::string& outputFile, const Queries& queries) 
 				<< " "
 				<< "Q" << queryIndex << " "
 				<< "S" << serverID << " "
-				<< "1" << std::endl;
+				<< "1" << "\n";
 		}
 
 		queryIndex++;
 	}
 
-	outputStream << "RHS" << std::endl;
+	outputStream << "RHS" << "\n";
 
 	for (ServerID serverID : servers) {
 		outputStream
@@ -615,17 +615,17 @@ static void dumpSetCover(const std::string& outputFile, const Queries& queries) 
 			<< " "
 			<< "R" << " "
 			<< "S" << serverID << " "
-			<< "1" << std::endl;
+			<< "1" << "\n";
 	}
 
-	outputStream << "BOUNDS" << std::endl;
+	outputStream << "BOUNDS" << "\n";
 
 	for (size_t columnIndex = 0; columnIndex < queryIndex; columnIndex++) {
 		outputStream
 			<< " "
 			<< "BV" << " "
 			<< "B" << " "
-			<< "Q" << columnIndex << std::endl;
+			<< "Q" << columnIndex << "\n";
 	}
 
 	outputStream << "ENDATA" << std::endl;
