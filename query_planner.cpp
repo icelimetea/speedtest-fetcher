@@ -575,13 +575,13 @@ static void dumpSetCover(const std::string& outputFile, const Queries& queries) 
 	outputStream
 		<< " "
 		<< "N" << " "
-		<< "SETS_COUNT" << "\n";
+		<< "QUERIES_COUNT" << "\n";
 
 	for (ServerID serverID : servers) {
 		outputStream
 			<< " "
 			<< "G" << " "
-			<< "S" << serverID << "\n";
+			<< "SERVER_" << serverID << "\n";
 	}
 
 	outputStream << "COLUMNS" << "\n";
@@ -589,18 +589,24 @@ static void dumpSetCover(const std::string& outputFile, const Queries& queries) 
 	size_t queryIndex = 0;
 	for (Queries::Query query : queries) {
 		outputStream
+			<< "*" << " "
+			<< " "
+			<< "QUERY_" << queryIndex << " "
+			<< query.getLocation() << "\n";
+
+		outputStream
 			<< " "
 			<< " "
-			<< "Q" << queryIndex << " "
-			<< "SETS_COUNT" << " "
+			<< "QUERY_" << queryIndex << " "
+			<< "QUERIES_COUNT" << " "
 			<< "1" << "\n";
 
 		for (ServerID serverID : query) {
 			outputStream
 				<< " "
 				<< " "
-				<< "Q" << queryIndex << " "
-				<< "S" << serverID << " "
+				<< "QUERY_" << queryIndex << " "
+				<< "SERVER_" << serverID << " "
 				<< "1" << "\n";
 		}
 
@@ -613,8 +619,8 @@ static void dumpSetCover(const std::string& outputFile, const Queries& queries) 
 		outputStream
 			<< " "
 			<< " "
-			<< "R" << " "
-			<< "S" << serverID << " "
+			<< "RHS_VECTOR" << " "
+			<< "SERVER_" << serverID << " "
 			<< "1" << "\n";
 	}
 
@@ -624,8 +630,8 @@ static void dumpSetCover(const std::string& outputFile, const Queries& queries) 
 		outputStream
 			<< " "
 			<< "BV" << " "
-			<< "B" << " "
-			<< "Q" << columnIndex << "\n";
+			<< "BOUNDS_VECTOR" << " "
+			<< "QUERY_" << columnIndex << "\n";
 	}
 
 	outputStream << "ENDATA" << std::endl;
