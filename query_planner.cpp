@@ -119,7 +119,8 @@ private:
 
 		Item() {}
 
-		Item(const Point3& location) : tag(location, 0) {}
+		Item(const Point3& location, size_t querySize) :
+			tag(location, querySize) {}
 	};
 
 	using ItemIterator = std::vector<Item>::const_iterator;
@@ -131,7 +132,7 @@ public:
 	class ServerIterator {
 	private:
 		ItemIterator iter;
-		size_t index;
+		size_t index = 0;
 	public:
 		using difference_type = std::ptrdiff_t;
 		using value_type = ServerID;
@@ -238,7 +239,7 @@ public:
 	Queries& operator=(const Queries& other) = delete;
 
 	void beginQuery(const Point3& location) {
-		this->items.emplace_back(location);
+		this->items.emplace_back(location, 0);
 		this->lastQueryIndex = this->items.size() - 1;
 	}
 
@@ -470,9 +471,9 @@ class ServerList {
 private:
 	using JsonIterator = simdjson::simdjson_result<simdjson::ondemand::array_iterator>;
 
-	simdjson::padded_string jsonData;
-
 	simdjson::ondemand::parser jsonParser;
+
+	simdjson::padded_string jsonData;
 	simdjson::ondemand::document jsonDocument;
 public:
 	class ServerListIterator {
