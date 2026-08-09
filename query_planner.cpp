@@ -272,7 +272,7 @@ private:
 	inline static const Angle LONG_RANGE_ANGLE = Angle(2000.0 / EARTH_RADIUS_MILES);
 
 	struct VertexInfo {
-		bool reached;
+		bool reached = false;
 		std::vector<ServerID> servers;
 	};
 
