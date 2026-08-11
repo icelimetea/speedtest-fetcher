@@ -1,5 +1,6 @@
 #include <cstdint>
 #include <cmath>
+#include <bit>
 #include <numbers>
 #include <limits>
 #include <vector>
@@ -112,7 +113,7 @@ private:
 	};
 
 	union Item {
-		static constexpr size_t NUM_SERVERS = sizeof(QueryTag) / sizeof(ServerID);
+		static constexpr size_t NUM_SERVERS = std::bit_ceil(sizeof(QueryTag) / sizeof(ServerID));
 
 		QueryTag tag;
 		ServerID servers[NUM_SERVERS];
