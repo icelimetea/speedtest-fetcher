@@ -113,7 +113,7 @@ private:
 	};
 
 	union Item {
-		static constexpr size_t NUM_SERVERS = std::bit_ceil(sizeof(QueryTag) / sizeof(ServerID));
+		static constexpr size_t NUM_SERVERS = std::bit_ceil((sizeof(QueryTag) + sizeof(ServerID) - 1) / sizeof(ServerID));
 
 		QueryTag tag;
 		ServerID servers[NUM_SERVERS];
