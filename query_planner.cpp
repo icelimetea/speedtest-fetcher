@@ -82,9 +82,10 @@ public:
 		double latRad = this->lat * std::numbers::pi / 180;
 		double lonRad = this->lon * std::numbers::pi / 180;
 
-		double x = std::cos(latRad) * std::cos(lonRad);
-		double y = std::cos(latRad) * std::sin(lonRad);
 		double z = std::sin(latRad);
+		double h = std::cos(latRad);
+		double x = h * std::cos(lonRad);
+		double y = h * std::sin(lonRad);
 
 		return Point3(x, y, z);
 	}
@@ -95,13 +96,14 @@ private:
 	absl::InsecureBitGen rng;
 public:
 	Point3 operator()() {
-		double x = absl::Gaussian<double>(this->rng);
-		double y = absl::Gaussian<double>(this->rng);
-		double z = absl::Gaussian<double>(this->rng);
+		double lonRad = absl::Uniform<double>(absl::IntervalClosedOpen, this->rng, 0, 2 * std::numbers::pi);
 
-		double length = std::sqrt(x * x + y * y + z * z);
+		double z = absl::Uniform<double>(absl::IntervalClosed, this->rng, -1, 1);
+		double h = std::sqrt(1 - z * z);
+		double x = h * std::cos(lonRad);
+		double y = h * std::sin(lonRad);
 
-		return Point3(x, y, z, length);
+		return Point3(x, y, z);
 	}
 };
 
@@ -133,7 +135,7 @@ public:
 	class ServerIterator {
 	private:
 		ItemIterator iter;
-		size_t index = 0;
+		size_t index;
 	public:
 		using difference_type = std::ptrdiff_t;
 		using value_type = ServerID;
@@ -216,7 +218,7 @@ public:
 		}
 
 		QueryIterator& operator++() {
-			this->iter += (this->iter->tag.size + Item::NUM_SERVERS - 1) / Item::NUM_SERVERS + 1;
+			this->iter += 1 + (this->iter->tag.size + Item::NUM_SERVERS - 1) / Item::NUM_SERVERS;
 			return *this;
 		}
 
@@ -398,6 +400,9 @@ private:
 			int li;
 			loc = this->delaunay.locate(origin, lt, li, loc);
 
+			if (loc == FaceHandle())
+				throw std::invalid_argument("Unable to locate the point on a sphere");
+
 			if (lt != SphericalDelaunay::Locate_type::VERTEX && lt != SphericalDelaunay::Locate_type::TOO_CLOSE) {
 				this->delaunay.get_conflicts_and_boundary(origin, std::back_inserter(faces), NoOpEdgeIterator(), loc);
 
@@ -562,11 +567,11 @@ static size_t pruneQueries(std::vector<GeographicPoint>& result, const Queries& 
 
 	for (size_t bucketIndex = buckets.size() - 1; bucketIndex > 0; bucketIndex--) {
 		for (Queries::Query query : buckets[bucketIndex]) {
-			size_t actualSize = query.size();
+			size_t actualSize = 0;
 
 			for (ServerID serverID : query)
-				if (covered.contains(serverID))
-					actualSize--;
+				if (!covered.contains(serverID))
+					actualSize++;
 
 			if (actualSize == bucketIndex) {
 				for (ServerID serverID : query)
