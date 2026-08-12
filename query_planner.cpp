@@ -130,7 +130,7 @@ private:
 
 	std::vector<Item> items;
 
-	size_t lastQueryIndex = 0;
+	size_t lastQueryIndex;
 public:
 	class ServerIterator {
 	private:
