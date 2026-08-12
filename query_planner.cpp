@@ -447,7 +447,12 @@ public:
 	QueryBuilder(ServerIt begin, ServerIt end) {
 		for (ServerIt it = begin; it != end; ++it) {
 			const std::pair<ServerID, GeographicPoint>& server = *it;
+
 			VertexHandle vertex = this->delaunay.insert(server.second.toPoint());
+
+			if (vertex == VertexHandle())
+				throw std::invalid_argument("Unable to insert the point into a triangulation");
+
 			vertex->info().servers.push_back(server.first);
 		}
 
