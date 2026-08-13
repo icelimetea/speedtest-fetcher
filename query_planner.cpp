@@ -1,3 +1,4 @@
+#include <cassert>
 #include <cstdint>
 #include <cmath>
 #include <bit>
@@ -24,6 +25,7 @@
 #include <CGAL/Delaunay_triangulation_on_sphere_2.h>
 
 using LinearKernel = CGAL::Exact_predicates_inexact_constructions_kernel;
+using SphericalDelaunayTraits = CGAL::Delaunay_triangulation_on_sphere_traits_2<LinearKernel>;
 
 using Point3 = LinearKernel::Point_3;
 
@@ -33,11 +35,14 @@ class Angle {
 private:
 	double cos;
 public:
-	Angle(LinearKernel::FT radians) :
-		cos(std::cos(radians)) {}
+	Angle(LinearKernel::FT radians) : cos(std::cos(radians)) {
+		assert(0 <= radians && radians < 2 * std::numbers::pi);
+	}
 
-	Angle(const Point3& p1, const Point3& p2) :
-		cos(p1.x() * p2.x() + p1.y() * p2.y() + p1.z() * p2.z()) {}
+	Angle(const Point3& p1, const Point3& p2) : cos(p1.x() * p2.x() + p1.y() * p2.y() + p1.z() * p2.z()) {
+		assert(SphericalDelaunayTraits().is_on_sphere(p1));
+		assert(SphericalDelaunayTraits().is_on_sphere(p2));
+	}
 
 	LinearKernel::FT cosine() const {
 		return this->cos;
@@ -66,6 +71,8 @@ public:
 	}
 
 	GeographicPoint(const Point3& point) {
+		assert(SphericalDelaunayTraits().is_on_sphere(point));
+
 		this->lat = std::asin(point.z()) * 180 / std::numbers::pi;
 		this->lon = std::atan2(point.y(), point.x()) * 180 / std::numbers::pi;
 	}
@@ -91,7 +98,7 @@ public:
 	}
 };
 
-class RandomPointGenerator {
+class RandomSpherePointGenerator {
 private:
 	absl::InsecureBitGen rng;
 public:
@@ -247,6 +254,8 @@ public:
 	}
 
 	void insertServer(ServerID serverID) {
+		assert(!this->items.empty());
+
 		size_t serverIndex = (this->items[this->lastQueryIndex].tag.size++) % Item::NUM_SERVERS;
 
 		if (serverIndex == 0)
@@ -279,8 +288,6 @@ private:
 		bool reached = false;
 		std::vector<ServerID> servers;
 	};
-
-	using SphericalDelaunayTraits = CGAL::Delaunay_triangulation_on_sphere_traits_2<LinearKernel>;
 
 	using VertexBase = CGAL::Triangulation_on_sphere_vertex_base_2<SphericalDelaunayTraits>;
 	using VertexBaseWithID = CGAL::Triangulation_vertex_base_with_info_2<VertexInfo, SphericalDelaunayTraits, VertexBase>;
@@ -400,8 +407,7 @@ private:
 			int li;
 			loc = this->delaunay.locate(origin, lt, li, loc);
 
-			if (loc == FaceHandle())
-				throw std::invalid_argument("Unable to locate the point on a sphere");
+			assert(loc != FaceHandle());
 
 			if (lt != SphericalDelaunay::Locate_type::VERTEX && lt != SphericalDelaunay::Locate_type::TOO_CLOSE) {
 				this->delaunay.get_conflicts_and_boundary(origin, std::back_inserter(faces), NoOpEdgeIterator(), loc);
@@ -450,8 +456,7 @@ public:
 
 			VertexHandle vertex = this->delaunay.insert(server.second.toPoint());
 
-			if (vertex == VertexHandle())
-				throw std::invalid_argument("Unable to insert the point into a triangulation");
+			assert(vertex != VertexHandle());
 
 			vertex->info().servers.push_back(server.first);
 		}
@@ -464,8 +469,8 @@ public:
 
 	QueryBuilder& operator=(const QueryBuilder& other) = delete;
 
-	template <typename PointGenerator>
-	void build(Queries& queries, PointGenerator generator, size_t pointsCount) const {
+	template <typename SpherePointGenerator>
+	void build(Queries& queries, SpherePointGenerator generator, size_t pointsCount) const {
 		std::vector<Point3> points;
 		points.reserve(pointsCount);
 
@@ -706,7 +711,7 @@ int main(int argc, char** argv) {
 	QueryBuilder builder(serverList.begin(), serverList.end());
 	Queries queries(pointsCount, QueryBuilder::MAX_SERVERS_PER_RANGE);
 
-	builder.build(queries, RandomPointGenerator(), pointsCount);
+	builder.build(queries, RandomSpherePointGenerator(), pointsCount);
 
 	if (setCoverFile.has_value())
 		dumpSetCover(setCoverFile.value(), queries);
