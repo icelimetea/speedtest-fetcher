@@ -4,6 +4,7 @@
 #include <bit>
 #include <numbers>
 #include <limits>
+#include <array>
 #include <vector>
 #include <utility>
 #include <algorithm>
@@ -46,10 +47,7 @@ public:
 		assert(SphericalDelaunayTraits().is_on_sphere(p1));
 		assert(SphericalDelaunayTraits().is_on_sphere(p2));
 
-		this->cos = 0;
-		this->cos = std::fma(p1.x(), p2.x(), this->cos);
-		this->cos = std::fma(p1.y(), p2.y(), this->cos);
-		this->cos = std::fma(p1.z(), p2.z(), this->cos);
+		this->cos = p1.x() * p2.x() + p1.y() * p2.y() + p1.z() * p2.z();
 	}
 
 	LinearKernel::FT cosine() const {
@@ -292,6 +290,15 @@ private:
 	inline static const Angle SHORT_RANGE_ANGLE = Angle(30.0 / EARTH_RADIUS_MILES);
 	inline static const Angle LONG_RANGE_ANGLE = Angle(2000.0 / EARTH_RADIUS_MILES);
 
+	inline static const std::array<Point3, 6> EPHEMERAL_POINTS = {
+		Point3(-1,  0,  0),
+		Point3( 0, -1,  0),
+		Point3( 0,  0, -1),
+		Point3( 1,  0,  0),
+		Point3( 0,  1,  0),
+		Point3( 0,  0,  1)
+	};
+
 	struct VertexInfo {
 		bool reached = false;
 		std::vector<ServerID> servers;
@@ -307,6 +314,8 @@ private:
 
 	using VertexHandle = SphericalDelaunay::Vertex_handle;
 	using FaceHandle = SphericalDelaunay::Face_handle;
+
+	using LocateType = SphericalDelaunay::Locate_type;
 
 	SphericalDelaunay delaunay;
 
@@ -411,13 +420,20 @@ private:
 		FaceHandle loc;
 
 		for (const Point3& origin : searchPoints) {
-			SphericalDelaunay::Locate_type lt;
+			LocateType lt;
 			int li;
 			loc = this->delaunay.locate(origin, lt, li, loc);
 
 			assert(loc != FaceHandle());
 
-			if (lt != SphericalDelaunay::Locate_type::VERTEX && lt != SphericalDelaunay::Locate_type::TOO_CLOSE) {
+			if (lt == LocateType::VERTEX || lt == LocateType::TOO_CLOSE) {
+				VertexHandle found = loc->vertex(li);
+
+				found->info().reached = true;
+
+				clearList.push_back(found);
+				vertices.emplace_back(origin, found);
+			} else {
 				this->delaunay.get_conflicts_and_boundary(origin, std::back_inserter(faces), NoOpEdgeIterator(), loc);
 
 				for (FaceHandle face : faces) {
@@ -436,13 +452,6 @@ private:
 				}
 
 				std::make_heap(vertices.begin(), vertices.end(), std::greater{});
-			} else {
-				VertexHandle found = loc->vertex(li);
-
-				found->info().reached = true;
-
-				clearList.push_back(found);
-				vertices.emplace_back(origin, found);
 			}
 
 			this->dijkstraSearch(origin, vertices, clearList, queries);
@@ -459,6 +468,9 @@ private:
 public:
 	template <typename ServerIt>
 	QueryBuilder(ServerIt begin, ServerIt end) {
+		for (const Point3& point : EPHEMERAL_POINTS)
+			this->delaunay.insert(point);
+
 		for (ServerIt it = begin; it != end; ++it) {
 			const std::pair<ServerID, GeographicPoint>& server = *it;
 
@@ -469,8 +481,7 @@ public:
 			vertex->info().servers.push_back(server.first);
 		}
 
-		if (this->delaunay.dimension() != 2)
-			throw std::invalid_argument("Delaunay triangulation is degenerate");
+		assert(this->delaunay.dimension() == 2);
 	}
 
 	QueryBuilder(const QueryBuilder& other) = delete;
