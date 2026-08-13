@@ -25,6 +25,7 @@
 #include <CGAL/Delaunay_triangulation_on_sphere_2.h>
 
 using LinearKernel = CGAL::Exact_predicates_inexact_constructions_kernel;
+
 using SphericalDelaunayTraits = CGAL::Delaunay_triangulation_on_sphere_traits_2<LinearKernel>;
 
 using Point3 = LinearKernel::Point_3;
@@ -35,13 +36,20 @@ class Angle {
 private:
 	double cos;
 public:
-	Angle(LinearKernel::FT radians) : cos(std::cos(radians)) {
-		assert(0 <= radians && radians < 2 * std::numbers::pi);
+	Angle(LinearKernel::FT radians) {
+		assert(0 <= radians && radians <= std::numbers::pi);
+
+		this->cos = std::cos(radians);
 	}
 
-	Angle(const Point3& p1, const Point3& p2) : cos(p1.x() * p2.x() + p1.y() * p2.y() + p1.z() * p2.z()) {
+	Angle(const Point3& p1, const Point3& p2) {
 		assert(SphericalDelaunayTraits().is_on_sphere(p1));
 		assert(SphericalDelaunayTraits().is_on_sphere(p2));
+
+		this->cos = 0;
+		this->cos = std::fma(p1.x(), p2.x(), this->cos);
+		this->cos = std::fma(p1.y(), p2.y(), this->cos);
+		this->cos = std::fma(p1.z(), p2.z(), this->cos);
 	}
 
 	LinearKernel::FT cosine() const {
