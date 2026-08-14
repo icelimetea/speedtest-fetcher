@@ -35,7 +35,7 @@ using ServerID = int32_t;
 
 class Angle {
 private:
-	double cos;
+	LinearKernel::FT cos;
 public:
 	Angle(LinearKernel::FT radians) {
 		assert(0 <= radians && radians <= std::numbers::pi);
@@ -65,8 +65,8 @@ public:
 
 class GeographicPoint {
 private:
-	double lat;
-	double lon;
+	LinearKernel::FT lat;
+	LinearKernel::FT lon;
 public:
 	GeographicPoint(std::string_view latitude, std::string_view longitude) {
 		if (std::from_chars(latitude.data(), latitude.data() + latitude.size(), this->lat).ec != std::errc())
@@ -92,13 +92,13 @@ public:
 	}
 
 	Point3 toPoint() const {
-		double latRad = this->lat * std::numbers::pi / 180;
-		double lonRad = this->lon * std::numbers::pi / 180;
+		LinearKernel::FT latRad = this->lat * std::numbers::pi / 180;
+		LinearKernel::FT lonRad = this->lon * std::numbers::pi / 180;
 
-		double z = std::sin(latRad);
-		double h = std::cos(latRad);
-		double x = h * std::cos(lonRad);
-		double y = h * std::sin(lonRad);
+		LinearKernel::FT z = std::sin(latRad);
+		LinearKernel::FT h = std::cos(latRad);
+		LinearKernel::FT x = h * std::cos(lonRad);
+		LinearKernel::FT y = h * std::sin(lonRad);
 
 		return Point3(x, y, z);
 	}
@@ -106,17 +106,24 @@ public:
 
 class RandomSpherePointGenerator {
 private:
+	static constexpr LinearKernel::RT MIN_LENGTH = 1 / 1024;
+
 	absl::InsecureBitGen rng;
 public:
 	Point3 operator()() {
-		double lonRad = absl::Uniform<double>(absl::IntervalClosedOpen, this->rng, 0, 2 * std::numbers::pi);
+		LinearKernel::RT x;
+		LinearKernel::RT y;
+		LinearKernel::RT z;
+		LinearKernel::RT w;
 
-		double z = absl::Uniform<double>(absl::IntervalClosed, this->rng, -1, 1);
-		double h = std::sqrt(1 - z * z);
-		double x = h * std::cos(lonRad);
-		double y = h * std::sin(lonRad);
+		do {
+			x = absl::Gaussian<LinearKernel::RT>(this->rng);
+			y = absl::Gaussian<LinearKernel::RT>(this->rng);
+			z = absl::Gaussian<LinearKernel::RT>(this->rng);
+			w = std::hypot(x, y, z);
+		} while (w < MIN_LENGTH);
 
-		return Point3(x, y, z);
+		return Point3(x, y, z, w);
 	}
 };
 
@@ -285,10 +292,13 @@ public:
 	static constexpr size_t MAX_LONG_RANGE_SERVERS = 20;
 	static constexpr size_t MAX_SERVERS_PER_RANGE = std::max(MAX_SHORT_RANGE_SERVERS, MAX_LONG_RANGE_SERVERS);
 private:
-	static constexpr double EARTH_RADIUS_MILES = 3963.1676;
+	static constexpr LinearKernel::FT EARTH_RADIUS_MILES = 3963.1676;
 
-	inline static const Angle SHORT_RANGE_ANGLE = Angle(30.0 / EARTH_RADIUS_MILES);
-	inline static const Angle LONG_RANGE_ANGLE = Angle(2000.0 / EARTH_RADIUS_MILES);
+	static constexpr LinearKernel::FT SHORT_RANGE_MILES = 30.0;
+	static constexpr LinearKernel::FT LONG_RANGE_MILES = 2000.0;
+
+	inline static const Angle SHORT_RANGE_ANGLE = Angle(SHORT_RANGE_MILES / EARTH_RADIUS_MILES);
+	inline static const Angle LONG_RANGE_ANGLE = Angle(LONG_RANGE_MILES / EARTH_RADIUS_MILES);
 
 	inline static const std::array<Point3, 6> EPHEMERAL_POINTS = {
 		Point3(-1,  0,  0),
