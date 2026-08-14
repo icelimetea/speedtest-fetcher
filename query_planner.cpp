@@ -594,15 +594,15 @@ static size_t pruneQueries(std::vector<GeographicPoint>& result, const Queries& 
 	if (buckets.empty())
 		return 0;
 
-	for (size_t bucketIndex = buckets.size() - 1; bucketIndex > 0; bucketIndex--) {
-		for (Queries::Query query : buckets[bucketIndex]) {
+	for (size_t bucketSize = buckets.size(); bucketSize > 0; bucketSize--) {
+		for (Queries::Query query : buckets[bucketSize - 1]) {
 			size_t actualSize = 0;
 
 			for (ServerID serverID : query)
 				if (!covered.contains(serverID))
 					actualSize++;
 
-			if (actualSize == bucketIndex + 1) {
+			if (actualSize == bucketSize) {
 				covered.insert(query.begin(), query.end());
 
 				result.emplace_back(query.getLocation());
