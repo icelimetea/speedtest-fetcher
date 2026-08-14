@@ -54,12 +54,12 @@ public:
 		return this->cos;
 	}
 
-	friend bool operator<(const Angle& lhs, const Angle& rhs) {
-		return lhs.cos > rhs.cos;
+	bool operator<(const Angle& other) const {
+		return this->cos > other.cos;
 	}
 
-	friend bool operator>(const Angle& lhs, const Angle& rhs) {
-		return lhs.cos < rhs.cos;
+	bool operator>(const Angle& other) const {
+		return this->cos < other.cos;
 	}
 };
 
@@ -347,12 +347,12 @@ private:
 			vertex(vertex),
 			distance(origin, vertex->point()) {}
 
-		friend bool operator<(const Neighbour& lhs, const Neighbour& rhs) {
-			return lhs.distance < rhs.distance;
+		bool operator<(const Neighbour& other) const {
+			return this->distance < other.distance;
 		}
 
-		friend bool operator>(const Neighbour& lhs, const Neighbour& rhs) {
-			return lhs.distance > rhs.distance;
+		bool operator>(const Neighbour& other) const {
+			return this->distance > other.distance;
 		}
 	};
 
@@ -584,11 +584,11 @@ static size_t pruneQueries(std::vector<GeographicPoint>& result, const Queries& 
 	for (Queries::Query query : queries) {
 		size_t querySize = query.size();
 
-		if (querySize >= buckets.size())
-			buckets.resize(querySize + 1);
+		if (querySize > buckets.size())
+			buckets.resize(querySize);
 
 		if (querySize > 0)
-			buckets[querySize].push_back(query);
+			buckets[querySize - 1].push_back(query);
 	}
 
 	if (buckets.empty())
@@ -602,13 +602,12 @@ static size_t pruneQueries(std::vector<GeographicPoint>& result, const Queries& 
 				if (!covered.contains(serverID))
 					actualSize++;
 
-			if (actualSize == bucketIndex) {
-				for (ServerID serverID : query)
-					covered.insert(serverID);
+			if (actualSize == bucketIndex + 1) {
+				covered.insert(query.begin(), query.end());
 
 				result.emplace_back(query.getLocation());
 			} else if (actualSize > 0) {
-				buckets[actualSize].push_back(query);
+				buckets[actualSize - 1].push_back(query);
 			}
 		}
 	}
@@ -622,8 +621,7 @@ static void dumpSetCover(const std::string& outputFile, const Queries& queries) 
 	absl::flat_hash_set<ServerID> servers;
 
 	for (Queries::Query query : queries)
-		for (ServerID serverID : query)
-			servers.insert(serverID);
+		servers.insert(query.begin(), query.end());
 
 	outputStream << "NAME SET_COVER" << "\n";
 
