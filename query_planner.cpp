@@ -366,10 +366,12 @@ private:
 		}
 	};
 
-	void dijkstraSearch(const Point3& origin,
-			    std::vector<Neighbour>& vertices,
-			    std::vector<VertexHandle>& clearList,
-			    Queries& queries) const {
+	void dijkstraSearch(
+			const Point3& origin,
+			std::vector<Neighbour>& vertices,
+			std::vector<VertexHandle>& clearList,
+			Queries& queries
+	) const {
 		queries.beginQuery(origin);
 
 		size_t insertedServers = 0;
