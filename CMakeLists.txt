@@ -8,6 +8,7 @@ find_package(simdjson REQUIRED)
 
 add_executable(query_planner query_planner.cpp)
 
+set_property(TARGET query_planner PROPERTY CXX_EXTENSIONS OFF)
 set_property(TARGET query_planner PROPERTY CXX_STANDARD 20)
 set_property(TARGET query_planner PROPERTY CXX_STANDARD_REQUIRED ON)
 set_property(TARGET query_planner PROPERTY EXPORT_COMPILE_COMMANDS ON)
