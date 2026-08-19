@@ -16,7 +16,7 @@ set_property(TARGET query_planner PROPERTY EXPORT_COMPILE_COMMANDS ON)
 
 set_property(TARGET query_planner PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE ON)
 
-set(PGO_PROFILES_DIR ${CMAKE_SOURCE_DIR}/profiles/)
+set(PGO_PROFILES_DIR ${CMAKE_SOURCE_DIR}/profiles)
 
 if(PGO STREQUAL "PROFILE")
 	if(MSVC)
@@ -42,10 +42,14 @@ else()
 	target_compile_options(query_planner PRIVATE -Wall -Wextra -Wpedantic -Werror -Wno-c2y-extensions)
 endif()
 
-target_link_libraries(query_planner absl::flags
-                                    absl::flags_parse
-                                    absl::random_random
-                                    absl::random_distributions
-                                    absl::flat_hash_set
-                                    CGAL::CGAL
-                                    simdjson::simdjson)
+target_link_libraries(
+	query_planner
+	PRIVATE
+	absl::flags
+	absl::flags_parse
+	absl::random_random
+	absl::random_distributions
+	absl::flat_hash_set
+	simdjson::simdjson
+	CGAL::CGAL
+)

@@ -14,13 +14,14 @@ jobs:
       - name: Install build dependencies
         if: runner.os == 'Linux'
         run: sudo apt install autoconf autoconf-archive automake libtool
-      - name: Install dependencies
+      - name: Install project dependencies
         run: vcpkg install abseil cgal simdjson
       - name: Configure build
         run: >
           cmake
+          -DCMAKE_TOOLCHAIN_FILE=${{ env.VCPKG_INSTALLATION_ROOT }}/scripts/buildsystems/vcpkg.cmake
+          -DCMAKE_BUILD_TYPE=Release
           -S ${{ github.workspace }}
           -B ${{ github.workspace }}/build
-          --preset ci
       - name: Run build
         run: cmake --build ${{ github.workspace }}/build
