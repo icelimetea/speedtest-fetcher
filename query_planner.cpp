@@ -85,7 +85,7 @@ public:
 			throw std::invalid_argument("Latitude should be a finite floating-point value");
 
 		if (!std::isfinite(this->lon))
-			throw std::invalid_argument("Latitude should be a finite floating-point value");
+			throw std::invalid_argument("Longitude should be a finite floating-point value");
 	}
 
 	GeographicPoint(const Point3& point) {
