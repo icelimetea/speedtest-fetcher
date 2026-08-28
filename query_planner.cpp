@@ -75,10 +75,13 @@ public:
 		const char* lon_start = longitude.data();
 		const char* lon_end = longitude.data() + longitude.size();
 
-		if (std::from_chars(lat_start, lat_end, this->lat).ptr != lat_end)
+		std::from_chars_result lat_result = std::from_chars(lat_start, lat_end, this->lat);
+		std::from_chars_result lon_result = std::from_chars(lon_start, lon_end, this->lon);
+
+		if (lat_result.ec != std::errc() || lat_result.ptr != lat_end)
 			throw std::invalid_argument("Invalid latitude");
 
-		if (std::from_chars(lon_start, lon_end, this->lon).ptr != lon_end)
+		if (lon_result.ec != std::errc() || lon_result.ptr != lon_end)
 			throw std::invalid_argument("Invalid longitude");
 
 		if (!std::isfinite(this->lat))
