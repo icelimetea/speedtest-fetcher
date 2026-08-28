@@ -69,11 +69,23 @@ private:
 	LinearKernel::FT lon;
 public:
 	GeographicPoint(std::string_view latitude, std::string_view longitude) {
-		if (std::from_chars(latitude.data(), latitude.data() + latitude.size(), this->lat).ec != std::errc())
+		const char* lat_start = latitude.data();
+		const char* lat_end = latitude.data() + latitude.size();
+
+		const char* lon_start = longitude.data();
+		const char* lon_end = longitude.data() + longitude.size();
+
+		if (std::from_chars(lat_start, lat_end, this->lat).ptr != lat_end)
 			throw std::invalid_argument("Invalid latitude");
 
-		if (std::from_chars(longitude.data(), longitude.data() + longitude.size(), this->lon).ec != std::errc())
+		if (std::from_chars(lon_start, lon_end, this->lon).ptr != lon_end)
 			throw std::invalid_argument("Invalid longitude");
+
+		if (!std::isfinite(this->lat))
+			throw std::invalid_argument("Latitude should be a finite floating-point value");
+
+		if (!std::isfinite(this->lon))
+			throw std::invalid_argument("Latitude should be a finite floating-point value");
 	}
 
 	GeographicPoint(const Point3& point) {
@@ -106,7 +118,7 @@ public:
 
 class RandomSpherePointGenerator {
 private:
-	static constexpr LinearKernel::RT MIN_LENGTH = 1 / 1024;
+	static constexpr LinearKernel::RT MIN_LENGTH = 1.0 / 1024.0;
 
 	absl::InsecureBitGen rng;
 public:
