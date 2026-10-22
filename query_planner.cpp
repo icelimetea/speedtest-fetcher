@@ -142,162 +142,163 @@ public:
 	}
 };
 
-class Queries {
+template <typename Metadata, typename Element>
+class PackedVector {
 private:
-	struct QueryTag {
-		Point3 location;
-		size_t size;
+	struct ItemTag {
+		Metadata entryMeta;
+		size_t entrySize;
 	};
 
 	union Item {
-		static constexpr size_t NUM_SERVERS = std::bit_ceil((sizeof(QueryTag) + sizeof(ServerID) - 1) / sizeof(ServerID));
+		static constexpr size_t NUM_ELEMENTS = std::bit_ceil((sizeof(ItemTag) + sizeof(Element) - 1) / sizeof(Element));
 
-		QueryTag tag;
-		ServerID servers[NUM_SERVERS];
+		ItemTag tag;
+		Element data[NUM_ELEMENTS];
 
 		Item() {}
 
-		Item(const Point3& location, size_t querySize) :
-			tag(location, querySize) {}
+		Item(const Metadata& entryMeta, size_t entrySize) :
+			tag(entryMeta, entrySize) {}
 	};
 
 	using ItemIterator = std::vector<Item>::const_iterator;
 
 	std::vector<Item> items;
 
-	size_t lastQueryIndex;
+	size_t lastItemIndex;
 public:
-	class ServerIterator {
+	class ElementIterator {
 	private:
 		ItemIterator iter;
 		size_t index;
 	public:
 		using difference_type = std::ptrdiff_t;
-		using value_type = ServerID;
+		using value_type = Element;
 		using reference = const value_type&;
 		using pointer = const value_type*;
 		using iterator_category = std::forward_iterator_tag;
 
-		ServerIterator() = default;
+		ElementIterator() = default;
 
-		ServerIterator(const ServerIterator& other) = default;
+		ElementIterator(const ElementIterator& other) = default;
 
-		ServerIterator(ItemIterator itemIterator, size_t serverIndex) :
-			iter(itemIterator + serverIndex / Item::NUM_SERVERS),
-			index(serverIndex % Item::NUM_SERVERS) {}
+		ElementIterator(ItemIterator itemIterator, size_t elementIndex) :
+			iter(itemIterator + elementIndex / Item::NUM_ELEMENTS),
+			index(elementIndex % Item::NUM_ELEMENTS) {}
 
-		const ServerID& operator*() const {
-			return this->iter->servers[this->index];
+		const Element& operator*() const {
+			return this->iter->data[this->index];
 		}
 
-		const ServerID* operator->() const {
-			return &this->iter->servers[this->index];
+		const Element* operator->() const {
+			return &this->iter->data[this->index];
 		}
 
-		ServerIterator& operator++() {
-			this->iter += (this->index + 1) / Item::NUM_SERVERS;
-			this->index = (this->index + 1) % Item::NUM_SERVERS;
+		ElementIterator& operator++() {
+			this->iter += (this->index + 1) / Item::NUM_ELEMENTS;
+			this->index = (this->index + 1) % Item::NUM_ELEMENTS;
 			return *this;
 		}
 
-		ServerIterator operator++(int) {
-			ServerIterator it = *this;
+		ElementIterator operator++(int) {
+			ElementIterator it = *this;
 			++*this;
 			return it;
 		}
 
-		bool operator==(const ServerIterator& other) const {
+		bool operator==(const ElementIterator& other) const {
 			return this->iter == other.iter && this->index == other.index;
 		}
 	};
 
-	class Query {
+	class Entry {
 	private:
 		ItemIterator iter;
 	public:
-		Query(ItemIterator itemIterator) : iter(itemIterator) {}
+		Entry(ItemIterator itemIterator) : iter(itemIterator) {}
 
-		const Point3& getLocation() const {
-			return this->iter->tag.location;
+		const Metadata& metadata() const {
+			return this->iter->tag.entryMeta;
 		}
 
 		size_t size() const {
-			return this->iter->tag.size;
+			return this->iter->tag.entrySize;
 		}
 
-		ServerIterator begin() const {
-			return ServerIterator(this->iter + 1, 0);
+		ElementIterator begin() const {
+			return ElementIterator(this->iter + 1, 0);
 		}
 
-		ServerIterator end() const {
-			return ServerIterator(this->iter + 1, this->iter->tag.size);
+		ElementIterator end() const {
+			return ElementIterator(this->iter + 1, this->iter->tag.entrySize);
 		}
 	};
 
-	class QueryIterator {
+	class EntryIterator {
 	private:
 		ItemIterator iter;
 	public:
 		using difference_type = std::ptrdiff_t;
-		using value_type = Query;
+		using value_type = Entry;
 		using reference = value_type;
 		using pointer = void;
 		using iterator_category = std::input_iterator_tag;
 
-		QueryIterator(const QueryIterator& other) = default;
+		EntryIterator(const EntryIterator& other) = default;
 
-		QueryIterator(ItemIterator itemIterator) : iter(itemIterator) {}
+		EntryIterator(ItemIterator itemIterator) : iter(itemIterator) {}
 
-		Query operator*() const {
-			return Query(this->iter);
+		Entry operator*() const {
+			return Entry(this->iter);
 		}
 
-		QueryIterator& operator++() {
-			this->iter += 1 + (this->iter->tag.size + Item::NUM_SERVERS - 1) / Item::NUM_SERVERS;
+		EntryIterator& operator++() {
+			this->iter += 1 + (this->iter->tag.entrySize + Item::NUM_ELEMENTS - 1) / Item::NUM_ELEMENTS;
 			return *this;
 		}
 
-		QueryIterator operator++(int) {
-			QueryIterator it = *this;
+		EntryIterator operator++(int) {
+			EntryIterator it = *this;
 			++*this;
 			return it;
 		}
 
-		bool operator==(const QueryIterator& other) const {
+		bool operator==(const EntryIterator& other) const {
 			return this->iter == other.iter;
 		}
 	};
 
-	Queries(size_t queryCount, size_t serversPerQuery) {
-		this->items.reserve((1 + (serversPerQuery + Item::NUM_SERVERS - 1) / Item::NUM_SERVERS) * queryCount);
+	PackedVector(size_t entryCount, size_t entrySize) {
+		this->items.reserve((1 + (entrySize + Item::NUM_ELEMENTS - 1) / Item::NUM_ELEMENTS) * entryCount);
 	}
 
-	Queries(const Queries& other) = delete;
+	PackedVector(const PackedVector& other) = delete;
 
-	Queries& operator=(const Queries& other) = delete;
+	PackedVector& operator=(const PackedVector& other) = delete;
 
-	void beginQuery(const Point3& location) {
-		this->items.emplace_back(location, 0);
-		this->lastQueryIndex = this->items.size() - 1;
+	void beginEntry(const Metadata& metadata) {
+		this->items.emplace_back(metadata, 0);
+		this->lastItemIndex = this->items.size() - 1;
 	}
 
-	void insertServer(ServerID serverID) {
+	void insertElement(const Element& element) {
 		assert(!this->items.empty());
 
-		size_t serverIndex = (this->items[this->lastQueryIndex].tag.size++) % Item::NUM_SERVERS;
+		size_t elementIndex = (this->items[this->lastItemIndex].tag.entrySize++) % Item::NUM_ELEMENTS;
 
-		if (serverIndex == 0)
+		if (elementIndex == 0)
 			this->items.emplace_back();
 
-		this->items.back().servers[serverIndex] = serverID;
+		this->items.back().data[elementIndex] = element;
 	}
 
-	QueryIterator begin() const {
-		return QueryIterator(this->items.begin());
+	EntryIterator begin() const {
+		return EntryIterator(this->items.begin());
 	}
 
-	QueryIterator end() const {
-		return QueryIterator(this->items.end());
+	EntryIterator end() const {
+		return EntryIterator(this->items.end());
 	}
 };
 
@@ -385,9 +386,9 @@ private:
 			const Point3& origin,
 			std::vector<Neighbour>& vertices,
 			std::vector<VertexHandle>& clearList,
-			Queries& queries
+			PackedVector<Point3, ServerID>& queries
 	) const {
-		queries.beginQuery(origin);
+		queries.beginEntry(origin);
 
 		size_t insertedServers = 0;
 
@@ -408,7 +409,7 @@ private:
 				if (insertedServers >= limit)
 					return;
 
-				queries.insertServer(serverID);
+				queries.insertElement(serverID);
 
 				insertedServers++;
 			}
@@ -434,7 +435,7 @@ private:
 		}
 	}
 
-	void build(Queries& queries, const std::vector<Point3>& searchPoints) const {
+	void build(PackedVector<Point3, ServerID>& queries, const std::vector<Point3>& searchPoints) const {
 		std::vector<Neighbour> vertices;
 		vertices.reserve(this->delaunay.number_of_vertices());
 
@@ -516,7 +517,7 @@ public:
 	QueryBuilder& operator=(const QueryBuilder& other) = delete;
 
 	template <typename SpherePointGenerator>
-	void build(Queries& queries, SpherePointGenerator generator, size_t pointsCount) const {
+	void build(PackedVector<Point3, ServerID>& queries, SpherePointGenerator generator, size_t pointsCount) const {
 		std::vector<Point3> points;
 		points.reserve(pointsCount);
 
@@ -603,12 +604,12 @@ namespace simdjson {
 	}
 }
 
-static size_t pruneQueries(std::vector<GeographicPoint>& result, const Queries& queries) {
+static size_t pruneQueries(std::vector<GeographicPoint>& result, const PackedVector<Point3, ServerID>& queries) {
 	absl::flat_hash_set<ServerID> covered;
 
-	std::vector<std::vector<Queries::Query>> buckets;
+	std::vector<std::vector<PackedVector<Point3, ServerID>::Entry>> buckets;
 
-	for (Queries::Query query : queries) {
+	for (PackedVector<Point3, ServerID>::Entry query : queries) {
 		size_t querySize = query.size();
 
 		if (querySize > buckets.size())
@@ -622,7 +623,7 @@ static size_t pruneQueries(std::vector<GeographicPoint>& result, const Queries& 
 		return 0;
 
 	for (size_t bucketSize = buckets.size(); bucketSize > 0; bucketSize--) {
-		for (Queries::Query query : buckets[bucketSize - 1]) {
+		for (PackedVector<Point3, ServerID>::Entry query : buckets[bucketSize - 1]) {
 			size_t actualSize = 0;
 
 			for (ServerID serverID : query)
@@ -632,7 +633,7 @@ static size_t pruneQueries(std::vector<GeographicPoint>& result, const Queries& 
 			if (actualSize == bucketSize) {
 				covered.insert(query.begin(), query.end());
 
-				result.emplace_back(query.getLocation());
+				result.emplace_back(query.metadata());
 			} else if (actualSize > 0) {
 				buckets[actualSize - 1].push_back(query);
 			}
@@ -642,12 +643,12 @@ static size_t pruneQueries(std::vector<GeographicPoint>& result, const Queries& 
 	return covered.size();
 }
 
-static void dumpSetCover(const std::string& outputFile, const Queries& queries) {
+static void dumpSetCover(const std::string& outputFile, const PackedVector<Point3, ServerID>& queries) {
 	std::ofstream outputStream(outputFile);
 
 	absl::flat_hash_set<ServerID> servers;
 
-	for (Queries::Query query : queries)
+	for (PackedVector<Point3, ServerID>::Entry query : queries)
 		servers.insert(query.begin(), query.end());
 
 	outputStream << "NAME SET_COVER" << "\n";
@@ -671,11 +672,11 @@ static void dumpSetCover(const std::string& outputFile, const Queries& queries) 
 	outputStream << "COLUMNS" << "\n";
 
 	size_t queryIndex = 0;
-	for (Queries::Query query : queries) {
+	for (PackedVector<Point3, ServerID>::Entry query : queries) {
 		outputStream
 			<< "*" << " "
 			<< "QUERY_" << queryIndex << " "
-			<< query.getLocation() << "\n";
+			<< query.metadata() << "\n";
 
 		outputStream
 			<< " "
@@ -753,7 +754,7 @@ int main(int argc, char** argv) {
 	ServerList serverList(serversFile);
 
 	QueryBuilder builder(serverList.begin(), serverList.end());
-	Queries queries(pointsCount, QueryBuilder::MAX_SERVERS_PER_RANGE);
+	PackedVector<Point3, ServerID> queries(pointsCount, QueryBuilder::MAX_SERVERS_PER_RANGE);
 
 	builder.build(queries, RandomSpherePointGenerator(), pointsCount);
 
