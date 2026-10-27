@@ -25,6 +25,8 @@
 #include <CGAL/Delaunay_triangulation_on_sphere_traits_2.h>
 #include <CGAL/Delaunay_triangulation_on_sphere_2.h>
 
+namespace {
+
 using LinearKernel = CGAL::Exact_predicates_inexact_constructions_kernel;
 
 using SphericalDelaunayTraits = CGAL::Delaunay_triangulation_on_sphere_traits_2<LinearKernel>;
@@ -37,13 +39,13 @@ class Angle {
 private:
 	LinearKernel::FT cos;
 public:
-	Angle(LinearKernel::FT radians) {
+	explicit Angle(LinearKernel::FT radians) noexcept {
 		assert(0 <= radians && radians <= std::numbers::pi);
 
 		this->cos = std::cos(radians);
 	}
 
-	Angle(const Point3& p1, const Point3& p2) {
+	explicit Angle(const Point3& p1, const Point3& p2) noexcept {
 		assert(SphericalDelaunayTraits().is_on_sphere(p1));
 		assert(SphericalDelaunayTraits().is_on_sphere(p2));
 
@@ -68,6 +70,13 @@ private:
 	LinearKernel::FT lat;
 	LinearKernel::FT lon;
 public:
+	explicit GeographicPoint(const Point3& point) noexcept {
+		assert(SphericalDelaunayTraits().is_on_sphere(point));
+
+		this->lat = std::asin(point.z()) * 180 / std::numbers::pi;
+		this->lon = std::atan2(point.y(), point.x()) * 180 / std::numbers::pi;
+	}
+
 	GeographicPoint(std::string_view latitude, std::string_view longitude) {
 		const char* lat_start = latitude.data();
 		const char* lat_end = latitude.data() + latitude.size();
@@ -89,13 +98,6 @@ public:
 
 		if (!std::isfinite(this->lon))
 			throw std::invalid_argument("Longitude should be a finite floating-point value");
-	}
-
-	GeographicPoint(const Point3& point) {
-		assert(SphericalDelaunayTraits().is_on_sphere(point));
-
-		this->lat = std::asin(point.z()) * 180 / std::numbers::pi;
-		this->lon = std::atan2(point.y(), point.x()) * 180 / std::numbers::pi;
 	}
 
 	LinearKernel::FT getLatitude() const {
@@ -154,7 +156,7 @@ private:
 		static constexpr size_t NUM_ELEMENTS = std::bit_ceil((sizeof(ItemTag) + sizeof(Element) - 1) / sizeof(Element));
 
 		ItemTag tag;
-		Element data[NUM_ELEMENTS];
+		std::array<Element, NUM_ELEMENTS> data;
 
 		Item() {}
 
@@ -180,8 +182,6 @@ public:
 		using iterator_category = std::forward_iterator_tag;
 
 		ElementIterator() = default;
-
-		ElementIterator(const ElementIterator& other) = default;
 
 		ElementIterator(ItemIterator itemIterator, size_t elementIndex) :
 			iter(itemIterator + elementIndex / Item::NUM_ELEMENTS),
@@ -216,7 +216,7 @@ public:
 	private:
 		ItemIterator iter;
 	public:
-		Entry(ItemIterator itemIterator) : iter(itemIterator) {}
+		explicit Entry(ItemIterator itemIterator) : iter(itemIterator) {}
 
 		const Metadata& metadata() const {
 			return this->iter->tag.entryMeta;
@@ -245,9 +245,7 @@ public:
 		using pointer = void;
 		using iterator_category = std::input_iterator_tag;
 
-		EntryIterator(const EntryIterator& other) = default;
-
-		EntryIterator(ItemIterator itemIterator) : iter(itemIterator) {}
+		explicit EntryIterator(ItemIterator itemIterator) : iter(itemIterator) {}
 
 		Entry operator*() const {
 			return Entry(this->iter);
@@ -276,6 +274,12 @@ public:
 	PackedVector(const PackedVector& other) = delete;
 
 	PackedVector& operator=(const PackedVector& other) = delete;
+
+	PackedVector(PackedVector&& other) = default;
+
+	PackedVector& operator=(PackedVector&& other) = default;
+
+	~PackedVector() = default;
 
 	void beginEntry(const Metadata& metadata) {
 		this->items.emplace_back(metadata, 0);
@@ -516,6 +520,12 @@ public:
 
 	QueryBuilder& operator=(const QueryBuilder& other) = delete;
 
+	QueryBuilder(QueryBuilder&& other) = default;
+
+	QueryBuilder& operator=(QueryBuilder&& other) = default;
+
+	~QueryBuilder() = default;
+
 	template <typename SpherePointGenerator>
 	void build(PackedVector<Point3, ServerID>& queries, SpherePointGenerator generator, size_t pointsCount) const {
 		std::vector<Point3> points;
@@ -549,9 +559,7 @@ public:
 		using pointer = void;
 		using iterator_category = std::input_iterator_tag;
 
-		ServerListIterator(const ServerListIterator& other) = default;
-
-		ServerListIterator(const JsonIterator& jsonIterator) : iter(jsonIterator) {}
+		explicit ServerListIterator(const JsonIterator& jsonIterator) : iter(jsonIterator) {}
 
 		std::pair<ServerID, GeographicPoint> operator*() {
 			auto serverObj = *this->iter;
@@ -579,7 +587,7 @@ public:
 		}
 	};
 
-	ServerList(const std::string& inputFile) {
+	explicit ServerList(const std::string& inputFile) {
 		this->jsonData = simdjson::padded_string::load(inputFile);
 		this->jsonDocument = this->jsonParser.iterate(this->jsonData);
 	}
@@ -593,9 +601,11 @@ public:
 	}
 };
 
+}
+
 namespace simdjson {
 	template <typename builder_type>
-	void tag_invoke(serialize_tag, builder_type& builder, const GeographicPoint& point) {
+	static void tag_invoke(serialize_tag, builder_type& builder, const GeographicPoint& point) {
 		builder.start_object();
 		builder.append_key_value("latitude", point.getLatitude());
 		builder.append_comma();
@@ -604,7 +614,9 @@ namespace simdjson {
 	}
 }
 
-static size_t pruneQueries(std::vector<GeographicPoint>& result, const PackedVector<Point3, ServerID>& queries) {
+namespace {
+
+size_t pruneQueries(std::vector<GeographicPoint>& result, const PackedVector<Point3, ServerID>& queries) {
 	absl::flat_hash_set<ServerID> covered;
 
 	std::vector<std::vector<PackedVector<Point3, ServerID>::Entry>> buckets;
@@ -643,7 +655,7 @@ static size_t pruneQueries(std::vector<GeographicPoint>& result, const PackedVec
 	return covered.size();
 }
 
-static void dumpSetCover(const std::string& outputFile, const PackedVector<Point3, ServerID>& queries) {
+void dumpSetCover(const std::string& outputFile, const PackedVector<Point3, ServerID>& queries) {
 	std::ofstream outputStream(outputFile);
 
 	absl::flat_hash_set<ServerID> servers;
@@ -721,35 +733,40 @@ static void dumpSetCover(const std::string& outputFile, const PackedVector<Point
 	outputStream << "ENDATA" << std::endl;
 }
 
-static void dumpPoints(const std::string& outputFile, const std::vector<GeographicPoint>& points) {
+void dumpPoints(const std::string& outputFile, const std::vector<GeographicPoint>& points) {
 	std::ofstream outputStream(outputFile);
 	outputStream << simdjson::to_json(points) << std::endl;
+}
+
 }
 
 ABSL_FLAG(std::optional<std::string>, servers, std::nullopt, "Input file containing server list in JSON format");
 ABSL_FLAG(std::optional<std::string>, plan, std::nullopt, "Output file for storing planned queries in JSON format");
 ABSL_FLAG(std::optional<std::string>, setcover, std::nullopt, "If specified, output file for storing the set cover problem instance as a BIP (using CPLEX MPS format)");
-ABSL_FLAG(size_t, points, 1 << 20, "Number of points to sample");
+ABSL_FLAG(size_t, points, 1UL << 20UL, "Number of points to sample");
 
 int main(int argc, char** argv) {
 	absl::SetProgramUsageMessage("Query planner for server fetcher");
 
 	absl::ParseCommandLine(argc, argv);
 
-	if (!absl::GetFlag(FLAGS_servers)) {
+	std::optional<std::string> serversFlag = absl::GetFlag(FLAGS_servers);
+	std::optional<std::string> planFlag = absl::GetFlag(FLAGS_plan);
+	std::optional<std::string> setCoverFile = absl::GetFlag(FLAGS_setcover);
+	size_t pointsCount = absl::GetFlag(FLAGS_points);
+
+	if (!serversFlag) {
 		std::cout << "Input server list is not provided. See --help for details." << std::endl;
 		return 1;
 	}
 
-	if (!absl::GetFlag(FLAGS_plan)) {
+	if (!planFlag) {
 		std::cout << "Output file name for planned queries is not provided. See --help for details." << std::endl;
 		return 1;
 	}
 
-	std::string serversFile = absl::GetFlag(FLAGS_servers).value();
-	std::string planFile = absl::GetFlag(FLAGS_plan).value();
-	std::optional<std::string> setCoverFile = absl::GetFlag(FLAGS_setcover);
-	size_t pointsCount = absl::GetFlag(FLAGS_points);
+	std::string serversFile = serversFlag.value();
+	std::string planFile = planFlag.value();
 
 	ServerList serverList(serversFile);
 
